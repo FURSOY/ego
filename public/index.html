@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EGO Otobüs Takip Ekranı</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="app-container">
+        <!-- Otobüs kartları buraya dinamik olarak eklenecek -->
+    </div>
+
+    <script>
+        // Takip edilecek otobüslerin temel bilgileri
+        const buses = [
+            { id: 'bus-1', line: '561', stop: '50782' },
+            { id: 'bus-2', line: '540', stop: '50781' },
+            { id: 'bus-3', line: '561', stop: '50780' }
+        ];
+
+        const container = document.getElementById('app-container');
+
+        // Sayfa ilk yüklendiğinde her otobüs için bir kart oluştur
+        function initializeCards() {
+            container.innerHTML = ''; // Konteyneri temizle
+            buses.forEach(bus => {
+                const card = document.createElement('div');
+                card.className = 'bus-card';
+                card.id = bus.id;
+                card.innerHTML = `
+                    <h2 class="bus-line">${bus.line}</h2>
+                    <p class="bus-stop">Durak No: ${bus.stop}</p>
+                    <p class="bus-time loading">Yükleniyor...</p>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        // Sunucudan otobüs verilerini çek ve kartları güncelle
+        async function updateBusTimes() {
+            try {
+                const response = await fetch('/api/bustimes');
+                if (!response.ok) {
+                    throw new Error('Sunucu yanıt vermiyor.');
+                }
+                const data = await response.json();
+
+                // Her otobüs için gelen veriyi işle
+                data.forEach(busData => {
+                    const card = document.getElementById(busData.id);
+                    if (card) {
+                        const timeElement = card.querySelector('.bus-time');
+                        if (busData.found) {
+                            timeElement.textContent = busData.time;
+                            timeElement.classList.remove('not-found', 'loading');
+                        } else {
+                            timeElement.textContent = 'Bulunamadı';
+                            timeElement.classList.add('not-found');
+                            timeElement.classList.remove('loading');
+                        }
+                    }
+                });
+
+            } catch (error) {
+                console.error('Veri güncellenirken hata oluştu:', error);
+                // Hata durumunda tüm kartları hata moduna geçir
+                document.querySelectorAll('.bus-time').forEach(el => {
+                    el.textContent = 'Hata!';
+                    el.classList.add('not-found');
+                    el.classList.remove('loading');
+                });
+            }
+        }
+
+        // Sayfa yüklendiğinde başlat
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeCards();
+            updateBusTimes(); // İlk veriyi hemen çek
+            setInterval(updateBusTimes, 20000); // Her 20 saniyede bir güncelle
+        });
+    </script>
+
+</body>
+</html>
