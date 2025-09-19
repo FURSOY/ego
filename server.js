@@ -30,10 +30,22 @@ const busesToTrack = [
     }
 ];
 
+async function getBrowser() {
+    const isRemote = !!process.env.PUPPETEER_BROWSER_URL;
+    if (isRemote) {
+        // Canlı ortam: Uzak tarayıcıya bağlan
+        return puppeteer.connect({ browserWSEndpoint: process.env.PUPPETEER_BROWSER_URL });
+    } else {
+        // Lokal ortam: Yerel bir tarayıcı başlat
+        return puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+    }
+}
+
 async function scrapeSingleBus(url) {
     let browser;
+    const isRemote = !!process.env.PUPPETEER_BROWSER_URL;
     try {
-        browser = await puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
+        browser = await getBrowser();
         const page = await browser.newPage();
         await page.goto(url, { waitUntil: 'networkidle2' });
 
@@ -51,15 +63,19 @@ async function scrapeSingleBus(url) {
         }
     } catch (error) {
         console.error(error);
-        // Hata ayıklama için hata mesajını tarayıcıya gönder
         return { found: false, time: `Hata: ${error.message.substring(0, 200)}` };
     } finally {
         if (browser) {
-            await browser.close();
+            if (isRemote) {
+                await browser.disconnect();
+            } else {
+                await browser.close();
+            }
         }
     }
     return { found: false, time: 'Veri bulunamadı.' };
 }
+
 
 // Frontend dosyalarını (HTML, CSS) sunmak için public klasörünü kullan
 const __dirname = path.resolve(path.dirname(''));
