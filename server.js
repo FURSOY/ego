@@ -50,6 +50,7 @@ async function scrapeSingleBus(url) {
             return { found: true, time: timeText.trim().replace('Tahmini Varış Süresi: ', '') };
         }
     } catch (error) {
+        console.error(error);
         return { found: false, time: 'Bulunamadı' };
     } finally {
         if (browser) {
