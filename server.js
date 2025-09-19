@@ -51,13 +51,14 @@ async function scrapeSingleBus(url) {
         }
     } catch (error) {
         console.error(error);
-        return { found: false, time: 'Bulunamadı' };
+        // Hata ayıklama için hata mesajını tarayıcıya gönder
+        return { found: false, time: `Hata: ${error.message.substring(0, 200)}` };
     } finally {
         if (browser) {
             await browser.close();
         }
     }
-    return { found: false, time: 'Bulunamadı' };
+    return { found: false, time: 'Veri bulunamadı.' };
 }
 
 // Frontend dosyalarını (HTML, CSS) sunmak için public klasörünü kullan
