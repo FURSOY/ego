@@ -7,7 +7,7 @@ import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 puppeteer.use(StealthPlugin());
 
 const app = express();
-const port = 3000;
+const port = process.env.PORT || 3000;
 
 const busesToTrack = [
     {
