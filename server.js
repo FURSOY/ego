@@ -27,20 +27,10 @@ const busesToTrack = [
     }
 ];
 
-async function getBrowser() {
-    return puppeteer.launch({
-        args: chromium.args,
-        defaultViewport: chromium.defaultViewport,
-        executablePath: await chromium.executablePath(),
-        headless: chromium.headless,
-    });
-}
-
-async function scrapeSingleBus(url) {
-    let browser;
+async function scrapeSingleBus(browser, url) {
+    let page;
     try {
-        browser = await getBrowser();
-        const page = await browser.newPage();
+        page = await browser.newPage();
         await page.goto(url, { waitUntil: 'networkidle2' });
 
         const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
@@ -59,8 +49,8 @@ async function scrapeSingleBus(url) {
         console.error(error);
         return { found: false, time: `Hata: ${error.message.substring(0, 200)}` };
     } finally {
-        if (browser) {
-            await browser.close();
+        if (page) {
+            await page.close();
         }
     }
     return { found: false, time: 'Veri bulunamadı.' };
@@ -73,21 +63,36 @@ app.use(express.static(path.join(__dirname, 'public')));
 
 // Otobüs verilerini sağlayan API endpoint'i
 app.get('/api/bustimes', async (req, res) => {
-    console.log('API isteği alındı. Otobüs verileri çekiliyor...');
+    console.log('API isteği alındı. Tek tarayıcı ile otobüs verileri çekiliyor...');
+    let browser;
+    try {
+        browser = await puppeteer.launch({
+            args: chromium.args,
+            defaultViewport: chromium.defaultViewport,
+            executablePath: await chromium.executablePath(),
+            headless: chromium.headless,
+        });
 
-    // Tüm otobüsleri eş zamanlı olarak (paralel) kazı
-    const promises = busesToTrack.map(bus => scrapeSingleBus(bus.url));
-    const results = await Promise.all(promises);
+        const promises = busesToTrack.map(bus => scrapeSingleBus(browser, bus.url));
+        const results = await Promise.all(promises);
 
-    // Sonuçları frontend'in beklediği formatla birleştir
-    const responseData = results.map((result, index) => ({
-        id: busesToTrack[index].id,
-        line: busesToTrack[index].line,
-        ...result
-    }));
+        const responseData = results.map((result, index) => ({
+            id: busesToTrack[index].id,
+            line: busesToTrack[index].line,
+            ...result
+        }));
 
-    console.log('Veriler gönderiliyor:', responseData);
-    res.json(responseData);
+        console.log('Veriler gönderiliyor:', responseData);
+        res.json(responseData);
+
+    } catch (error) {
+        console.error("Genel tarayıcı hatası:", error);
+        res.status(500).json({ message: "Otobüs verileri alınırken bir sunucu hatası oluştu." });
+    } finally {
+        if (browser) {
+            await browser.close();
+        }
+    }
 });
 
 // Sunucuyu başlat
