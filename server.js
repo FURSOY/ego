@@ -1,10 +1,7 @@
 import express from 'express';
 import path from 'path';
 import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
-
-// Puppeteer'a gizlilik eklentisini kur
-puppeteer.use(StealthPlugin());
+import chromium from '@sparticuz/chromium';
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -31,19 +28,16 @@ const busesToTrack = [
 ];
 
 async function getBrowser() {
-    const isRemote = !!process.env.PUPPETEER_BROWSER_URL;
-    if (isRemote) {
-        // Canlı ortam: Uzak tarayıcıya bağlan
-        return puppeteer.connect({ browserWSEndpoint: process.env.PUPPETEER_BROWSER_URL });
-    } else {
-        // Lokal ortam: Yerel bir tarayıcı başlat
-        return puppeteer.launch({ headless: true, args: ['--no-sandbox', '--disable-setuid-sandbox'] });
-    }
+    return puppeteer.launch({
+        args: chromium.args,
+        defaultViewport: chromium.defaultViewport,
+        executablePath: await chromium.executablePath(),
+        headless: chromium.headless,
+    });
 }
 
 async function scrapeSingleBus(url) {
     let browser;
-    const isRemote = !!process.env.PUPPETEER_BROWSER_URL;
     try {
         browser = await getBrowser();
         const page = await browser.newPage();
@@ -66,11 +60,7 @@ async function scrapeSingleBus(url) {
         return { found: false, time: `Hata: ${error.message.substring(0, 200)}` };
     } finally {
         if (browser) {
-            if (isRemote) {
-                await browser.disconnect();
-            } else {
-                await browser.close();
-            }
+            await browser.close();
         }
     }
     return { found: false, time: 'Veri bulunamadı.' };

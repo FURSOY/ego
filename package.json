@@ -16,7 +16,8 @@
     "cheerio": "^1.1.2",
     "express": "^5.1.0",
     "nodemon": "^3.1.10",
-    "puppeteer": "^24.20.0",
+    "puppeteer-core": "22.13.0",
+    "@sparticuz/chromium": "123.0.1",
     "puppeteer-extra": "^3.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2"
   }
