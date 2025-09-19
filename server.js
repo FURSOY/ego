@@ -9,7 +9,6 @@ puppeteer.use(StealthPlugin());
 const app = express();
 const port = 3000;
 
-// Takip edilecek otobüslerin listesi
 const busesToTrack = [
     {
         id: 'bus-1',
@@ -31,7 +30,6 @@ const busesToTrack = [
     }
 ];
 
-// Tek bir otobüsün verisini çeken fonksiyon
 async function scrapeSingleBus(url) {
     let browser;
     try {
@@ -52,7 +50,6 @@ async function scrapeSingleBus(url) {
             return { found: true, time: timeText.trim().replace('Tahmini Varış Süresi: ', '') };
         }
     } catch (error) {
-        // Hata (genellikle zaman aşımı), otobüsün bulunamadığı anlamına gelir.
         return { found: false, time: 'Bulunamadı' };
     } finally {
         if (browser) {
@@ -69,7 +66,7 @@ app.use(express.static(path.join(__dirname, 'public')));
 // Otobüs verilerini sağlayan API endpoint'i
 app.get('/api/bustimes', async (req, res) => {
     console.log('API isteği alındı. Otobüs verileri çekiliyor...');
-    
+
     // Tüm otobüsleri eş zamanlı olarak (paralel) kazı
     const promises = busesToTrack.map(bus => scrapeSingleBus(bus.url));
     const results = await Promise.all(promises);
