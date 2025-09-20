@@ -3,13 +3,11 @@ import path from 'path';
 import puppeteer from 'puppeteer-extra';
 import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
-// Puppeteer'a gizlilik eklentisini kur
 puppeteer.use(StealthPlugin());
 
 const app = express();
 const port = 3000;
 
-// Takip edilecek otobüslerin listesi
 const busesToTrack = [
     {
         id: 'bus-1',
@@ -31,7 +29,6 @@ const busesToTrack = [
     }
 ];
 
-// Tek bir otobüsün verisini çeken fonksiyon
 async function scrapeSingleBus(url) {
     let browser;
     try {
@@ -52,7 +49,6 @@ async function scrapeSingleBus(url) {
             return { found: true, time: timeText.trim().replace('Tahmini Varış Süresi: ', '') };
         }
     } catch (error) {
-        // Hata (genellikle zaman aşımı), otobüsün bulunamadığı anlamına gelir.
         return { found: false, time: 'Bulunamadı' };
     } finally {
         if (browser) {
@@ -62,19 +58,15 @@ async function scrapeSingleBus(url) {
     return { found: false, time: 'Bulunamadı' };
 }
 
-// Frontend dosyalarını (HTML, CSS) sunmak için public klasörünü kullan
 const __dirname = path.resolve(path.dirname(''));
 app.use(express.static(path.join(__dirname, 'public')));
 
-// Otobüs verilerini sağlayan API endpoint'i
 app.get('/api/bustimes', async (req, res) => {
     console.log('API isteği alındı. Otobüs verileri çekiliyor...');
 
-    // Tüm otobüsleri eş zamanlı olarak (paralel) kazı
     const promises = busesToTrack.map(bus => scrapeSingleBus(bus.url));
     const results = await Promise.all(promises);
 
-    // Sonuçları frontend'in beklediği formatla birleştir
     const responseData = results.map((result, index) => ({
         id: busesToTrack[index].id,
         line: busesToTrack[index].line,
@@ -85,7 +77,6 @@ app.get('/api/bustimes', async (req, res) => {
     res.json(responseData);
 });
 
-// Sunucuyu başlat
 app.listen(port, () => {
     console.log(`Sunucu başlatıldı. Takip ekranına http://localhost:${port} adresinden ulaşabilirsiniz.`);
 });
