@@ -4,18 +4,30 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>EGO Otobüs Takip Ekranı</title>
+    <title>FURSOY Otobüs Takip</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
+    <div class="header">
+        <h1>Otobüsler</h1>
+        <div class="last-update" id="last-update">Son güncelleme: --:--:--</div>
+    </div>
 
     <div id="app-container">
-        <!-- Otobüs kartları buraya dinamik olarak eklenecek -->
+    </div>
+
+    <!-- <div class="refresh-indicator hidden" id="refresh-indicator">
+        <div class="refresh-spinner"></div>
+        <span>Güncelleniyor...</span>
+    </div> -->
+
+    <div class="Credit">
+        <img src="icon.png">
+        <h5>FURSOY</h5>
     </div>
 
     <script>
-        // Takip edilecek otobüslerin temel bilgileri
         const buses = [
             { id: 'bus-1', line: '561', stop: '50782' },
             { id: 'bus-2', line: '540', stop: '50781' },
@@ -23,67 +35,88 @@
         ];
 
         const container = document.getElementById('app-container');
+        const lastUpdateElement = document.getElementById('last-update');
 
-        // Sayfa ilk yüklendiğinde her otobüs için bir kart oluştur
+        function updateLastUpdateTime() {
+            const now = new Date();
+            const timeString = now.toLocaleTimeString('tr-TR');
+            lastUpdateElement.textContent = `Son güncelleme: ${timeString}`;
+        }
+
         function initializeCards() {
-            container.innerHTML = ''; // Konteyneri temizle
+            container.innerHTML = '';
             buses.forEach(bus => {
                 const card = document.createElement('div');
                 card.className = 'bus-card';
                 card.id = bus.id;
                 card.innerHTML = `
-                    <h2 class="bus-line">${bus.line}</h2>
-                    <p class="bus-stop">Durak No: ${bus.stop}</p>
-                    <p class="bus-time loading">Yükleniyor...</p>
+                    <div class="status-badge loading">Yükleniyor</div>
+                    <div class="bus-header">
+                        <h2 class="bus-line">${bus.line}</h2>
+                    </div>
+                    <div class="bus-info">
+                        <p class="bus-stop">Durak No: ${bus.stop}</p>
+                    </div>
+                    <div class="time-container">
+                        <div class="time-label">Tahmini Varış</div>
+                        <p class="bus-time loading">Yükleniyor...</p>
+                    </div>
                 `;
                 container.appendChild(card);
             });
         }
 
-        // Sunucudan otobüs verilerini çek ve kartları güncelle
         async function updateBusTimes() {
             try {
+
                 const response = await fetch('/api/bustimes');
                 if (!response.ok) {
                     throw new Error('Sunucu yanıt vermiyor.');
                 }
                 const data = await response.json();
 
-                // Her otobüs için gelen veriyi işle
                 data.forEach(busData => {
                     const card = document.getElementById(busData.id);
                     if (card) {
                         const timeElement = card.querySelector('.bus-time');
+                        const statusBadge = card.querySelector('.status-badge');
+
                         if (busData.found) {
                             timeElement.textContent = busData.time;
                             timeElement.classList.remove('not-found', 'loading');
+                            statusBadge.textContent = 'Aktif';
+                            statusBadge.className = 'status-badge active';
                         } else {
                             timeElement.textContent = 'Bulunamadı';
                             timeElement.classList.add('not-found');
                             timeElement.classList.remove('loading');
+                            statusBadge.textContent = 'Pasif';
+                            statusBadge.className = 'status-badge inactive';
                         }
                     }
                 });
 
+                updateLastUpdateTime();
             } catch (error) {
                 console.error('Veri güncellenirken hata oluştu:', error);
-                // Hata durumunda tüm kartları hata moduna geçir
                 document.querySelectorAll('.bus-time').forEach(el => {
-                    el.textContent = 'Hata!';
+                    el.textContent = 'Bağlantı Hatası!';
                     el.classList.add('not-found');
                     el.classList.remove('loading');
+                });
+                document.querySelectorAll('.status-badge').forEach(badge => {
+                    badge.textContent = 'Hata';
+                    badge.className = 'status-badge inactive';
                 });
             }
         }
 
-        // Sayfa yüklendiğinde başlat
         document.addEventListener('DOMContentLoaded', () => {
             initializeCards();
-            updateBusTimes(); // İlk veriyi hemen çek
-            setInterval(updateBusTimes, 20000); // Her 20 saniyede bir güncelle
+            updateBusTimes();
+            setInterval(updateBusTimes, 20000);
         });
     </script>
-
 </body>
 
 </html>
