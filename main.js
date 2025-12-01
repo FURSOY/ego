@@ -39,7 +39,13 @@ async function scrapeSingleBus(url) {
     try {
         browser = await puppeteer.launch({
             headless: true,
-            args: ['--no-sandbox', '--disable-setuid-sandbox']
+            ignoreHTTPSErrors: true,
+            args: [
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--ignore-certificate-errors',
+                '--ignore-certificate-errors-spki-list'
+            ]
         });
         const page = await browser.newPage();
         await page.goto(url, { waitUntil: 'networkidle2' });
