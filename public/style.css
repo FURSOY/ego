@@ -190,6 +190,74 @@ body {
     opacity: 0.7;
 }
 
+/* Info Modal Styles */
+.info-section {
+    background: var(--bg-primary);
+    border-radius: 8px;
+    padding: 16px;
+    margin-bottom: 16px;
+}
+
+.info-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 0;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.info-row:last-child {
+    border-bottom: none;
+}
+
+.info-label {
+    font-size: 14px;
+    color: var(--text-secondary);
+}
+
+.info-value {
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.status-ok {
+    color: var(--accent-success) !important;
+}
+
+.status-available {
+    color: var(--accent-warning) !important;
+}
+
+.status-ready {
+    color: var(--accent-primary) !important;
+}
+
+.status-checking {
+    color: var(--text-secondary) !important;
+}
+
+.info-actions {
+    display: flex;
+    gap: 10px;
+    justify-content: center;
+    margin-top: 16px;
+}
+
+.btn-primary {
+    background: var(--accent-primary);
+    color: white;
+}
+
+.btn-primary:hover {
+    background: #1d4ed8;
+}
+
+.info-hint {
+    font-size: 12px;
+    color: var(--text-secondary);
+}
+
 .dashboard {
     display: flex;
     flex-direction: column;

@@ -67,6 +67,50 @@
         </div>
     </div>
 
+    <!-- Info Modal (Q tuşu) -->
+    <div class="modal-overlay" id="info-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Uygulama Bilgileri</h2>
+                <button class="modal-close" onclick="closeInfoModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="info-section">
+                    <div class="info-row">
+                        <span class="info-label">Sürüm</span>
+                        <span class="info-value" id="app-version">Yükleniyor...</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Uygulama</span>
+                        <span class="info-value" id="app-name">EGO Otobüs Takip</span>
+                    </div>
+                </div>
+                <div class="info-section">
+                    <div class="info-row">
+                        <span class="info-label">Güncelleme Durumu</span>
+                        <span class="info-value" id="update-status">Kontrol ediliyor...</span>
+                    </div>
+                    <div class="info-row" id="update-version-row" style="display: none;">
+                        <span class="info-label">Yeni Sürüm</span>
+                        <span class="info-value" id="update-version">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="info-label">Son Kontrol</span>
+                        <span class="info-value" id="last-check">-</span>
+                    </div>
+                </div>
+                <div class="info-actions">
+                    <button class="btn btn-primary" onclick="checkForUpdates()">Güncelleme Kontrol Et</button>
+                    <button class="btn btn-save" id="install-update-btn" style="display: none;"
+                        onclick="installUpdate()">Güncellemeyi Yükle</button>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <span class="info-hint">E: Otobüs Düzenle | F: Tam Ekran</span>
+            </div>
+        </div>
+    </div>
+
     <script>
         // LocalStorage'dan otobüsleri yükle veya varsayılan kullan
         let buses = JSON.parse(localStorage.getItem('buses')) || [
@@ -266,11 +310,82 @@
             setInterval(updateBusTimes, 20000);
         });
 
+        // Info Modal fonksiyonları
+        const infoModal = document.getElementById('info-modal');
+
+        async function openInfoModal() {
+            infoModal.classList.add('active');
+            showCursor();
+            await loadAppInfo();
+        }
+
+        function closeInfoModal() {
+            infoModal.classList.remove('active');
+        }
+
+        async function loadAppInfo() {
+            try {
+                const response = await fetch('/api/app-info');
+                const data = await response.json();
+
+                document.getElementById('app-version').textContent = 'v' + data.version;
+                document.getElementById('app-name').textContent = data.name || 'EGO Otobüs Takip';
+
+                const status = data.updateStatus;
+                const statusEl = document.getElementById('update-status');
+                const versionRow = document.getElementById('update-version-row');
+                const installBtn = document.getElementById('install-update-btn');
+
+                if (status.checking) {
+                    statusEl.textContent = 'Kontrol ediliyor...';
+                    statusEl.className = 'info-value status-checking';
+                } else if (status.downloaded) {
+                    statusEl.textContent = 'İndirildi, yeniden başlatmayı bekliyor';
+                    statusEl.className = 'info-value status-ready';
+                    installBtn.style.display = 'inline-block';
+                } else if (status.available) {
+                    statusEl.textContent = 'Güncelleme mevcut';
+                    statusEl.className = 'info-value status-available';
+                    versionRow.style.display = 'flex';
+                    document.getElementById('update-version').textContent = 'v' + status.version;
+                } else {
+                    statusEl.textContent = 'Güncel ✓';
+                    statusEl.className = 'info-value status-ok';
+                }
+
+                if (status.lastCheck) {
+                    const date = new Date(status.lastCheck);
+                    document.getElementById('last-check').textContent = date.toLocaleTimeString('tr-TR');
+                }
+
+            } catch (error) {
+                console.error('App info yüklenemedi:', error);
+            }
+        }
+
+        async function checkForUpdates() {
+            document.getElementById('update-status').textContent = 'Kontrol ediliyor...';
+            try {
+                await fetch('/api/check-update', { method: 'POST' });
+                setTimeout(loadAppInfo, 2000);
+            } catch (error) {
+                console.error('Güncelleme kontrolü başarısız:', error);
+            }
+        }
+
+        async function installUpdate() {
+            if (confirm('Uygulama kapatılıp güncelleme yüklenecek. Devam edilsin mi?')) {
+                await fetch('/api/install-update', { method: 'POST' });
+            }
+        }
+
         // Klavye kısayolları
         document.addEventListener('keydown', (e) => {
+            const anyModalOpen = editModal.classList.contains('active') || infoModal.classList.contains('active');
+
             // F tuşu - tam ekran
             if (e.key === 'f' || e.key === 'F') {
-                if (!editModal.classList.contains('active')) {
+                if (!anyModalOpen) {
                     if (!document.fullscreenElement) {
                         document.documentElement.requestFullscreen();
                     } else {
@@ -281,16 +396,30 @@
 
             // E tuşu - düzenleme paneli
             if (e.key === 'e' || e.key === 'E') {
-                if (editModal.classList.contains('active')) {
-                    closeModal();
-                } else {
-                    openModal();
+                if (!infoModal.classList.contains('active')) {
+                    if (editModal.classList.contains('active')) {
+                        closeModal();
+                    } else {
+                        openModal();
+                    }
                 }
             }
 
-            // ESC tuşu - modalı kapat
+            // Q tuşu - özellikler paneli
+            if (e.key === 'q' || e.key === 'Q') {
+                if (!editModal.classList.contains('active')) {
+                    if (infoModal.classList.contains('active')) {
+                        closeInfoModal();
+                    } else {
+                        openInfoModal();
+                    }
+                }
+            }
+
+            // ESC tuşu - modalları kapat
             if (e.key === 'Escape') {
                 closeModal();
+                closeInfoModal();
             }
         });
     </script>

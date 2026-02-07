@@ -3,6 +3,8 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import { fork } from 'child_process';
+import pkg from 'electron-updater';
+const { autoUpdater } = pkg;
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -10,6 +12,50 @@ const __dirname = path.dirname(__filename);
 let mainWindow;
 let serverPort = 3000;
 let scraperProcess = null;
+
+// Güncelleme durumu
+let updateStatus = {
+    checking: false,
+    available: false,
+    downloaded: false,
+    version: null,
+    error: null,
+    lastCheck: null
+};
+
+// AutoUpdater yapılandırması
+autoUpdater.autoDownload = true;
+autoUpdater.autoInstallOnAppQuit = true;
+
+autoUpdater.on('checking-for-update', () => {
+    console.log('[UPDATE] Güncelleme kontrol ediliyor...');
+    updateStatus.checking = true;
+    updateStatus.lastCheck = new Date().toISOString();
+});
+
+autoUpdater.on('update-available', (info) => {
+    console.log('[UPDATE] Güncelleme mevcut:', info.version);
+    updateStatus.checking = false;
+    updateStatus.available = true;
+    updateStatus.version = info.version;
+});
+
+autoUpdater.on('update-not-available', () => {
+    console.log('[UPDATE] Uygulama güncel.');
+    updateStatus.checking = false;
+    updateStatus.available = false;
+});
+
+autoUpdater.on('update-downloaded', (info) => {
+    console.log('[UPDATE] Güncelleme indirildi:', info.version);
+    updateStatus.downloaded = true;
+});
+
+autoUpdater.on('error', (err) => {
+    console.log('[UPDATE] Güncelleme hatası:', err.message);
+    updateStatus.checking = false;
+    updateStatus.error = err.message;
+});
 
 function startScraper() {
     console.log('[MAIN] Scraper process başlatılıyor...');
@@ -80,6 +126,29 @@ function startExpressServer() {
         }
     });
 
+    // Uygulama bilgisi endpoint'i
+    expressApp.get('/api/app-info', (req, res) => {
+        res.json({
+            version: app.getVersion(),
+            name: app.getName(),
+            updateStatus: updateStatus
+        });
+    });
+
+    // Güncelleme kontrol endpoint'i
+    expressApp.post('/api/check-update', (req, res) => {
+        autoUpdater.checkForUpdates();
+        res.json({ success: true });
+    });
+
+    // Güncellemeyi uygula endpoint'i
+    expressApp.post('/api/install-update', (req, res) => {
+        if (updateStatus.downloaded) {
+            autoUpdater.quitAndInstall();
+        }
+        res.json({ success: updateStatus.downloaded });
+    });
+
     expressApp.get('/api/health', (req, res) => {
         res.json({
             status: 'ok',
@@ -132,6 +201,10 @@ if (!gotTheLock) {
 
         setTimeout(() => {
             createWindow();
+            // Başlangıçta güncelleme kontrol et
+            autoUpdater.checkForUpdates().catch(err => {
+                console.log('[UPDATE] Güncelleme kontrolü başarısız:', err.message);
+            });
         }, 500);
 
         app.on('activate', function () {
