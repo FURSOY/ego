@@ -45,7 +45,8 @@
           "target": "nsis"
         }
       ],
-      "icon": "icon.png"
+      "icon": "icon.png",
+      "artifactName": "${productName}-Setup-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
@@ -55,8 +56,8 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "GITHUB_KULLANICI_ADI",
-      "repo": "ego-main"
+      "owner": "FURSOY",
+      "repo": "ego"
     }
   }
 }
