@@ -1,0 +1,299 @@
+<!DOCTYPE html>
+<html lang="tr">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>EGO Otobüs Takip</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+    <div class="dashboard">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-left">
+                <img src="icon.png" class="logo" alt="Logo">
+                <h1>Otobüsler</h1>
+            </div>
+            <div class="header-right">
+                <div class="clock" id="clock">--:--:--</div>
+                <div class="update-info">
+                    <span class="update-label">Son Güncelleme:</span>
+                    <span class="update-time" id="last-update">--:--:--</span>
+                </div>
+            </div>
+        </header>
+
+        <!-- Bus Cards Container -->
+        <main class="cards-container" id="app-container">
+        </main>
+
+        <!-- Status Bar -->
+        <footer class="status-bar">
+            <div class="status-item">
+                <span class="status-dot active"></span>
+                <span>Sistem Aktif</span>
+            </div>
+            <div class="status-item" id="perf-display">
+                <span>⏱️ Yükleniyor...</span>
+            </div>
+        </footer>
+    </div>
+
+    <!-- Edit Modal -->
+    <div class="modal-overlay" id="edit-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Otobüs Düzenle</h2>
+                <button class="modal-close" onclick="closeModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="bus-list" id="bus-list">
+                    <!-- Otobüs listesi buraya gelecek -->
+                </div>
+                <div class="add-bus-form">
+                    <h3>Yeni Otobüs Ekle</h3>
+                    <div class="form-row">
+                        <input type="text" id="new-line" placeholder="Hat No (örn: 561)">
+                        <input type="text" id="new-stop" placeholder="Durak No (örn: 50782)">
+                        <button class="btn btn-add" onclick="addBus()">+ Ekle</button>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-save" onclick="saveAndReload()">Kaydet ve Yenile</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // LocalStorage'dan otobüsleri yükle veya varsayılan kullan
+        let buses = JSON.parse(localStorage.getItem('buses')) || [
+            { id: 'bus-1', line: '561', stop: '50782' },
+            { id: 'bus-2', line: '561', stop: '50781' },
+            { id: 'bus-3', line: '561', stop: '50780' }
+        ];
+
+        const container = document.getElementById('app-container');
+        const lastUpdateElement = document.getElementById('last-update');
+        const clockElement = document.getElementById('clock');
+        const perfDisplay = document.getElementById('perf-display');
+        const editModal = document.getElementById('edit-modal');
+
+        // Mouse gizleme - 5 saniye hareketsizlik
+        let mouseTimer;
+        let cursorHidden = false;
+
+        function showCursor() {
+            document.body.style.cursor = 'default';
+            cursorHidden = false;
+            clearTimeout(mouseTimer);
+            mouseTimer = setTimeout(hideCursor, 5000);
+        }
+
+        function hideCursor() {
+            document.body.style.cursor = 'none';
+            cursorHidden = true;
+        }
+
+        document.addEventListener('mousemove', showCursor);
+        document.addEventListener('mousedown', showCursor);
+        mouseTimer = setTimeout(hideCursor, 5000);
+
+        // Saat güncellemesi
+        function updateClock() {
+            const now = new Date();
+            clockElement.textContent = now.toLocaleTimeString('tr-TR');
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        function updateLastUpdateTime() {
+            const now = new Date();
+            lastUpdateElement.textContent = now.toLocaleTimeString('tr-TR');
+        }
+
+        function initializeCards() {
+            container.innerHTML = '';
+            buses.forEach(bus => {
+                const card = document.createElement('div');
+                card.className = 'bus-card loading';
+                card.id = bus.id;
+                card.innerHTML = `
+                    <div class="card-header">
+                        <div class="line-badge">${bus.line}</div>
+                        <div class="status-indicator loading">
+                            <span class="pulse"></span>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="arrival-time loading">--:--</div>
+                        <div class="arrival-label">Tahmini Varış</div>
+                    </div>
+                    <div class="card-footer">
+                        <span class="stop-info">Durak: ${bus.stop}</span>
+                    </div>
+                `;
+                container.appendChild(card);
+            });
+        }
+
+        async function updateBusTimes() {
+            try {
+                const response = await fetch('/api/bustimes');
+                if (!response.ok) throw new Error('Sunucu yanıt vermiyor.');
+
+                const result = await response.json();
+                const data = result.data;
+                const perf = result.performance;
+
+                data.forEach(busData => {
+                    const card = document.getElementById(busData.id);
+                    if (card) {
+                        const arrivalTime = card.querySelector('.arrival-time');
+                        const statusIndicator = card.querySelector('.status-indicator');
+
+                        card.classList.remove('loading', 'active', 'inactive');
+                        arrivalTime.classList.remove('loading');
+
+                        if (busData.found) {
+                            card.classList.add('active');
+                            arrivalTime.textContent = busData.time;
+                            statusIndicator.innerHTML = '<span class="pulse active"></span>';
+                            statusIndicator.className = 'status-indicator active';
+                        } else {
+                            card.classList.add('inactive');
+                            arrivalTime.textContent = busData.time || 'Sefer Yok';
+                            statusIndicator.innerHTML = '';
+                            statusIndicator.className = 'status-indicator inactive';
+                        }
+                    }
+                });
+
+                if (perf) {
+                    perfDisplay.innerHTML = `<span>⏱️ ${(perf.totalApiTime / 1000).toFixed(1)}s</span>`;
+                }
+
+                updateLastUpdateTime();
+
+            } catch (error) {
+                console.error('Hata:', error);
+                document.querySelectorAll('.bus-card').forEach(card => {
+                    card.classList.remove('loading', 'active');
+                    card.classList.add('inactive');
+                    card.querySelector('.arrival-time').textContent = 'Hata!';
+                });
+            }
+        }
+
+        // Modal fonksiyonları
+        function openModal() {
+            editModal.classList.add('active');
+            renderBusList();
+            showCursor();
+        }
+
+        function closeModal() {
+            editModal.classList.remove('active');
+        }
+
+        function renderBusList() {
+            const busList = document.getElementById('bus-list');
+            busList.innerHTML = buses.map((bus, index) => `
+                <div class="bus-item">
+                    <span class="bus-item-info">
+                        <strong>Hat ${bus.line}</strong> - Durak: ${bus.stop}
+                    </span>
+                    <button class="btn btn-delete" onclick="deleteBus(${index})">Sil</button>
+                </div>
+            `).join('');
+        }
+
+        function addBus() {
+            const line = document.getElementById('new-line').value.trim();
+            const stop = document.getElementById('new-stop').value.trim();
+
+            if (!line || !stop) {
+                alert('Hat ve durak numarası giriniz!');
+                return;
+            }
+
+            const newId = 'bus-' + Date.now();
+            buses.push({ id: newId, line, stop });
+
+            document.getElementById('new-line').value = '';
+            document.getElementById('new-stop').value = '';
+
+            renderBusList();
+        }
+
+        function deleteBus(index) {
+            if (buses.length <= 1) {
+                alert('En az bir otobüs olmalı!');
+                return;
+            }
+            buses.splice(index, 1);
+            renderBusList();
+        }
+
+        function saveAndReload() {
+            // ID'leri yeniden ata
+            buses = buses.map((bus, index) => ({
+                ...bus,
+                id: 'bus-' + (index + 1)
+            }));
+
+            localStorage.setItem('buses', JSON.stringify(buses));
+
+            // Sunucuya yeni otobüs listesini gönder
+            fetch('/api/update-buses', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(buses)
+            }).then(() => {
+                closeModal();
+                initializeCards();
+                updateBusTimes();
+            }).catch(err => {
+                alert('Kaydetme hatası: ' + err.message);
+            });
+        }
+
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeCards();
+            updateBusTimes();
+            setInterval(updateBusTimes, 20000);
+        });
+
+        // Klavye kısayolları
+        document.addEventListener('keydown', (e) => {
+            // F tuşu - tam ekran
+            if (e.key === 'f' || e.key === 'F') {
+                if (!editModal.classList.contains('active')) {
+                    if (!document.fullscreenElement) {
+                        document.documentElement.requestFullscreen();
+                    } else {
+                        document.exitFullscreen();
+                    }
+                }
+            }
+
+            // E tuşu - düzenleme paneli
+            if (e.key === 'e' || e.key === 'E') {
+                if (editModal.classList.contains('active')) {
+                    closeModal();
+                } else {
+                    openModal();
+                }
+            }
+
+            // ESC tuşu - modalı kapat
+            if (e.key === 'Escape') {
+                closeModal();
+            }
+        });
+    </script>
+</body>
+
+</html>
