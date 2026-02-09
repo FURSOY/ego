@@ -3,6 +3,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import express from 'express';
 import { fork } from 'child_process';
+import { WebSocketServer } from 'ws';
 import pkg from 'electron-updater';
 const { autoUpdater } = pkg;
 
@@ -11,7 +12,12 @@ const __dirname = path.dirname(__filename);
 
 let mainWindow;
 let serverPort = 3000;
+let wsPort = 3001;
 let scraperProcess = null;
+let wss = null;
+
+// Son otobüs verileri (cache)
+const busDataCache = new Map();
 
 // Güncelleme durumu
 let updateStatus = {
@@ -57,9 +63,56 @@ autoUpdater.on('error', (err) => {
     updateStatus.error = err.message;
 });
 
+// WebSocket Server başlat
+function startWebSocketServer() {
+    wss = new WebSocketServer({ port: wsPort });
+
+    wss.on('connection', (ws) => {
+        console.log('[WS] Yeni bağlantı');
+
+        // Mevcut cache'i gönder
+        for (const [busId, data] of busDataCache) {
+            ws.send(JSON.stringify({
+                type: 'bus-data',
+                busId,
+                data,
+                timestamp: new Date().toISOString()
+            }));
+        }
+
+        ws.on('close', () => {
+            console.log('[WS] Bağlantı kapandı');
+        });
+    });
+
+    console.log(`[WS] WebSocket server ws://localhost:${wsPort} adresinde çalışıyor`);
+}
+
+// Tüm bağlı client'lara veri gönder
+function broadcastToClients(message) {
+    if (!wss) return;
+
+    const data = JSON.stringify(message);
+    wss.clients.forEach(client => {
+        if (client.readyState === 1) { // OPEN
+            client.send(data);
+        }
+    });
+}
+
 function startScraper() {
     console.log('[MAIN] Scraper process başlatılıyor...');
     scraperProcess = fork(path.join(__dirname, 'scraper.cjs'));
+
+    scraperProcess.on('message', (msg) => {
+        // Scraper'dan gelen verileri WebSocket'e ilet
+        if (msg.type === 'bus-data') {
+            busDataCache.set(msg.busId, msg.data);
+            broadcastToClients(msg);
+        } else if (msg.type === 'bus-status') {
+            broadcastToClients(msg);
+        }
+    });
 
     scraperProcess.on('error', (err) => {
         console.error('[MAIN] Scraper error:', err);
@@ -73,46 +126,23 @@ function startScraper() {
     return scraperProcess;
 }
 
-function scrapeData() {
-    return new Promise((resolve, reject) => {
-        if (!scraperProcess) {
-            startScraper();
-        }
-
-        const timeout = setTimeout(() => {
-            reject(new Error('Scraping timeout (60s)'));
-        }, 60000);
-
-        scraperProcess.once('message', (msg) => {
-            clearTimeout(timeout);
-            if (msg.error) {
-                reject(new Error(msg.error));
-            } else {
-                resolve(msg);
-            }
-        });
-
-        scraperProcess.send({ action: 'scrape' });
-    });
-}
-
 function startExpressServer() {
     const expressApp = express();
 
     expressApp.use(express.json());
     expressApp.use(express.static(path.join(__dirname, 'public')));
 
-    expressApp.get('/api/bustimes', async (req, res) => {
-        console.log('[API] İstek alındı');
-        try {
-            const result = await scrapeData();
-            res.json(result);
-        } catch (error) {
-            console.error('[API] Hata:', error.message);
-            res.status(500).json({ error: error.message });
-        }
+    // Uygulama bilgisi endpoint'i
+    expressApp.get('/api/app-info', (req, res) => {
+        res.json({
+            version: app.getVersion(),
+            name: app.getName(),
+            updateStatus: updateStatus,
+            wsPort: wsPort
+        });
     });
 
+    // Otobüs güncelleme endpoint'i
     expressApp.post('/api/update-buses', (req, res) => {
         console.log('[API] Otobüs listesi güncelleniyor:', req.body);
         try {
@@ -124,15 +154,6 @@ function startExpressServer() {
             console.error('[API] Güncelleme hatası:', error.message);
             res.status(500).json({ error: error.message });
         }
-    });
-
-    // Uygulama bilgisi endpoint'i
-    expressApp.get('/api/app-info', (req, res) => {
-        res.json({
-            version: app.getVersion(),
-            name: app.getName(),
-            updateStatus: updateStatus
-        });
     });
 
     // Güncelleme kontrol endpoint'i
@@ -153,6 +174,7 @@ function startExpressServer() {
         res.json({
             status: 'ok',
             scraperRunning: scraperProcess !== null,
+            connectedClients: wss ? wss.clients.size : 0,
             timestamp: new Date().toISOString()
         });
     });
@@ -196,6 +218,7 @@ if (!gotTheLock) {
     });
 
     app.whenReady().then(async () => {
+        startWebSocketServer();
         startScraper();
         startExpressServer();
 
@@ -217,11 +240,17 @@ app.on('window-all-closed', function () {
     if (scraperProcess) {
         scraperProcess.send({ action: 'exit' });
     }
+    if (wss) {
+        wss.close();
+    }
     if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
     if (scraperProcess) {
         scraperProcess.send({ action: 'exit' });
+    }
+    if (wss) {
+        wss.close();
     }
 });

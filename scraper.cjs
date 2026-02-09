@@ -3,289 +3,220 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
 puppeteer.use(StealthPlugin());
 
+// Varsayılan otobüsler
 let busesToTrack = [
-    {
-        id: 'bus-1',
-        line: '561',
-        stop: '50782',
-        url: 'https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=50782&hat_no=561'
-    },
-    {
-        id: 'bus-2',
-        line: '561',
-        stop: '50781',
-        url: 'https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=50781&hat_no=561'
-    },
-    {
-        id: 'bus-3',
-        line: '561',
-        stop: '50780',
-        url: 'https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=50780&hat_no=561'
-    }
+    { id: 'bus-1', line: '561', stop: '50782' },
+    { id: 'bus-2', line: '561', stop: '50781' },
+    { id: 'bus-3', line: '561', stop: '50780' }
 ];
 
-let browser = null;
+// Aktif tarayıcılar
+const activeBrowsers = new Map();
 
-async function initBrowser() {
-    if (!browser || !browser.isConnected()) {
-        const startTime = performance.now();
-        console.log('[SCRAPER] Tarayıcı başlatılıyor...');
-
-        browser = await puppeteer.launch({
-            headless: true,
-            ignoreHTTPSErrors: true,
-            executablePath: puppeteer.executablePath(),
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--ignore-certificate-errors'
-            ]
+// Veri gönderme fonksiyonu
+function sendData(busId, data) {
+    if (process.send) {
+        process.send({
+            type: 'bus-data',
+            busId,
+            data,
+            timestamp: new Date().toISOString()
         });
-        console.log(`[SCRAPER] Tarayıcı hazır! (${(performance.now() - startTime).toFixed(0)}ms)`);
-    }
-    return browser;
-}
-
-async function scrapeSingleBus(browserInstance, busConfig) {
-    const startTime = performance.now();
-    let page = null;
-    let pageLoadTime = 0;
-    let scrapeTime = 0;
-
-    try {
-        const pageStart = performance.now();
-        page = await browserInstance.newPage();
-
-        // networkidle2 kullan - sayfa tam yüklensin
-        await page.goto(busConfig.url, {
-            waitUntil: 'networkidle2',
-            timeout: 20000
-        });
-        pageLoadTime = performance.now() - pageStart;
-
-        const scrapeStart = performance.now();
-        const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
-
-        await page.waitForSelector(buttonSelector, { timeout: 10000 });
-        await page.click(buttonSelector);
-
-        const timeSelector = 'b[style*="color: #B80000"]';
-        await page.waitForSelector(timeSelector, { timeout: 10000 });
-
-        const timeElement = await page.$(timeSelector);
-        scrapeTime = performance.now() - scrapeStart;
-
-        if (timeElement) {
-            const timeText = await page.evaluate(el => el.textContent, timeElement);
-            const totalTime = performance.now() - startTime;
-
-            console.log(`[PERF] ${busConfig.id} - Sayfa: ${pageLoadTime.toFixed(0)}ms | Scrape: ${scrapeTime.toFixed(0)}ms | TOPLAM: ${totalTime.toFixed(0)}ms`);
-
-            return {
-                found: true,
-                time: timeText.trim().replace('Tahmini Varış Süresi: ', ''),
-                perfStats: {
-                    pageLoadTime: Math.round(pageLoadTime),
-                    scrapeTime: Math.round(scrapeTime),
-                    totalTime: Math.round(totalTime),
-                    fromCache: false
-                }
-            };
-        }
-
-        return {
-            found: false,
-            time: 'Sefer Yok',
-            perfStats: { totalTime: Math.round(performance.now() - startTime), fromCache: false }
-        };
-
-    } catch (error) {
-        const totalTime = performance.now() - startTime;
-        console.log(`[PERF] ${busConfig.id} - HATA: ${error.message} - ${totalTime.toFixed(0)}ms`);
-
-        return {
-            found: false,
-            time: 'Bağlantı Hatası',
-            perfStats: { totalTime: Math.round(totalTime), fromCache: false, error: error.message }
-        };
-    } finally {
-        if (page) {
-            try { await page.close(); } catch (e) { }
-        }
     }
 }
 
-// Her otobüs kendi browser'ını açar - paralel çalışma için
-async function scrapeSingleBusWithOwnBrowser(busConfig) {
-    const startTime = performance.now();
+// Durum gönderme fonksiyonu
+function sendStatus(busId, status, message = '') {
+    if (process.send) {
+        process.send({
+            type: 'bus-status',
+            busId,
+            status,
+            message,
+            timestamp: new Date().toISOString()
+        });
+    }
+}
+
+// URL oluştur
+function buildUrl(bus) {
+    return `https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=${bus.stop}&hat_no=${bus.line}`;
+}
+
+// Tek otobüs için sürekli döngü
+async function startBusLoop(bus) {
     let browser = null;
     let page = null;
-    let browserTime = 0;
-    let pageLoadTime = 0;
-    let scrapeTime = 0;
+    let consecutiveErrors = 0;
+    const MAX_ERRORS = 3;
 
-    try {
-        const browserStart = performance.now();
-        browser = await puppeteer.launch({
-            headless: true,
-            ignoreHTTPSErrors: true,
-            executablePath: puppeteer.executablePath(),
-            args: [
-                '--no-sandbox',
-                '--disable-setuid-sandbox',
-                '--disable-dev-shm-usage',
-                '--disable-gpu',
-                '--ignore-certificate-errors'
-            ]
-        });
-        browserTime = performance.now() - browserStart;
+    console.log(`[${bus.id}] Döngü başlatılıyor...`);
+    sendStatus(bus.id, 'starting', 'Tarayıcı başlatılıyor');
 
-        const pageStart = performance.now();
-        page = await browser.newPage();
+    while (true) {
+        try {
+            // Tarayıcı yoksa veya kapalıysa başlat
+            if (!browser || !browser.isConnected()) {
+                console.log(`[${bus.id}] Tarayıcı açılıyor...`);
 
-        await page.goto(busConfig.url, {
-            waitUntil: 'networkidle2',
-            timeout: 20000
-        });
-        pageLoadTime = performance.now() - pageStart;
+                browser = await puppeteer.launch({
+                    headless: true,
+                    ignoreHTTPSErrors: true,
+                    args: [
+                        '--no-sandbox',
+                        '--disable-setuid-sandbox',
+                        '--disable-dev-shm-usage',
+                        '--disable-gpu',
+                        '--ignore-certificate-errors'
+                    ]
+                });
 
-        const scrapeStart = performance.now();
-        const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
+                activeBrowsers.set(bus.id, browser);
+                page = await browser.newPage();
 
-        await page.waitForSelector(buttonSelector, { timeout: 10000 });
-        await page.click(buttonSelector);
+                // Sayfa yükle
+                console.log(`[${bus.id}] Sayfa yükleniyor...`);
+                sendStatus(bus.id, 'loading', 'Sayfa yükleniyor');
 
-        const timeSelector = 'b[style*="color: #B80000"]';
-        await page.waitForSelector(timeSelector, { timeout: 10000 });
+                await page.goto(buildUrl(bus), {
+                    waitUntil: 'networkidle2',
+                    timeout: 30000
+                });
 
-        const timeElement = await page.$(timeSelector);
-        scrapeTime = performance.now() - scrapeStart;
+                console.log(`[${bus.id}] Sayfa hazır!`);
+            }
 
-        if (timeElement) {
-            const timeText = await page.evaluate(el => el.textContent, timeElement);
-            const totalTime = performance.now() - startTime;
+            // Buton tıkla
+            const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
+            sendStatus(bus.id, 'clicking', 'Veri çekiliyor');
 
-            console.log(`[PERF] ${busConfig.id} - Browser: ${browserTime.toFixed(0)}ms | Sayfa: ${pageLoadTime.toFixed(0)}ms | Scrape: ${scrapeTime.toFixed(0)}ms | TOPLAM: ${totalTime.toFixed(0)}ms`);
+            await page.waitForSelector(buttonSelector, { timeout: 10000, visible: true });
+            await page.click(buttonSelector);
 
-            return {
-                id: busConfig.id,
-                line: busConfig.line,
-                stop: busConfig.stop,
-                found: true,
-                time: timeText.trim().replace('Tahmini Varış Süresi: ', ''),
-                perfStats: {
-                    browserTime: Math.round(browserTime),
-                    pageLoadTime: Math.round(pageLoadTime),
-                    scrapeTime: Math.round(scrapeTime),
-                    totalTime: Math.round(totalTime)
+            // Sonuç bekle
+            const timeSelector = 'b[style*="color: #B80000"]';
+
+            try {
+                await page.waitForSelector(timeSelector, { timeout: 15000 });
+
+                const timeElement = await page.$(timeSelector);
+                if (timeElement) {
+                    const timeText = await page.evaluate(el => el.textContent, timeElement);
+                    const cleanTime = timeText.trim().replace('Tahmini Varış Süresi: ', '');
+
+                    console.log(`[${bus.id}] Veri: ${cleanTime}`);
+                    sendStatus(bus.id, 'active', cleanTime);
+                    sendData(bus.id, {
+                        found: true,
+                        time: cleanTime,
+                        line: bus.line,
+                        stop: bus.stop
+                    });
+
+                    consecutiveErrors = 0;
                 }
-            };
-        }
+            } catch (timeoutErr) {
+                // Otobüs bulunamadı
+                console.log(`[${bus.id}] Sefer yok`);
+                sendStatus(bus.id, 'inactive', 'Sefer Yok');
+                sendData(bus.id, {
+                    found: false,
+                    time: 'Sefer Yok',
+                    line: bus.line,
+                    stop: bus.stop
+                });
+                consecutiveErrors = 0;
+            }
 
-        return {
-            id: busConfig.id,
-            line: busConfig.line,
-            stop: busConfig.stop,
-            found: false,
-            time: 'Sefer Yok',
-            perfStats: { totalTime: Math.round(performance.now() - startTime) }
-        };
+            // Kısa bekleme - butona hemen tekrar tıkla
+            await new Promise(r => setTimeout(r, 500));
 
-    } catch (error) {
-        const totalTime = performance.now() - startTime;
-        console.log(`[PERF] ${busConfig.id} - HATA: ${error.message} - ${totalTime.toFixed(0)}ms`);
+        } catch (error) {
+            consecutiveErrors++;
+            console.error(`[${bus.id}] Hata (${consecutiveErrors}/${MAX_ERRORS}):`, error.message);
+            sendStatus(bus.id, 'error', error.message);
 
-        // Hata tipine göre mesaj belirle
-        let errorMessage = 'Bulunamadı';
-        if (error.message.includes('net::') ||
-            error.message.includes('ERR_') ||
-            error.message.includes('ENOTFOUND') ||
-            error.message.includes('ETIMEDOUT') ||
-            error.message.includes('Navigation')) {
-            errorMessage = 'Bağlantı Hatası';
-        }
+            if (consecutiveErrors >= MAX_ERRORS) {
+                console.log(`[${bus.id}] Çok fazla hata, 30 saniye bekleniyor...`);
+                sendStatus(bus.id, 'waiting', '30 saniye bekleniyor');
 
-        return {
-            id: busConfig.id,
-            line: busConfig.line,
-            stop: busConfig.stop,
-            found: false,
-            time: errorMessage,
-            perfStats: { totalTime: Math.round(totalTime), error: error.message }
-        };
-    } finally {
-        if (browser) {
-            try { await browser.close(); } catch (e) { }
+                // Tarayıcıyı kapat
+                if (browser) {
+                    try { await browser.close(); } catch (e) { }
+                    browser = null;
+                    page = null;
+                    activeBrowsers.delete(bus.id);
+                }
+
+                await new Promise(r => setTimeout(r, 30000));
+                consecutiveErrors = 0;
+            } else {
+                // Kısa bekleme sonra tekrar dene
+                await new Promise(r => setTimeout(r, 3000));
+
+                // Sayfayı yeniden yükle
+                if (page && browser && browser.isConnected()) {
+                    try {
+                        await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
+                    } catch (reloadErr) {
+                        // Tarayıcıyı yeniden başlat
+                        if (browser) {
+                            try { await browser.close(); } catch (e) { }
+                            browser = null;
+                            page = null;
+                            activeBrowsers.delete(bus.id);
+                        }
+                    }
+                }
+            }
         }
     }
 }
 
-async function scrapeAllBuses() {
-    const apiStartTime = performance.now();
+// Tüm otobüs döngülerini başlat
+async function startAllLoops() {
+    console.log('[SCRAPER] Tüm döngüler başlatılıyor...');
 
-    console.log('\n========================================');
-    console.log('[API] Veri çekiliyor:', new Date().toLocaleTimeString('tr-TR'));
-    console.log('========================================');
+    for (const bus of busesToTrack) {
+        // Her döngüyü ayrı promise olarak başlat (paralel)
+        startBusLoop(bus).catch(err => {
+            console.error(`[${bus.id}] Fatal error:`, err);
+        });
 
-    try {
-        // PARALEL scrape - her otobüs için ayrı browser
-        const promises = busesToTrack.map(bus => scrapeSingleBusWithOwnBrowser(bus));
-        const results = await Promise.all(promises);
-
-        const apiTotalTime = performance.now() - apiStartTime;
-
-        console.log('----------------------------------------');
-        console.log(`[API] TOPLAM: ${apiTotalTime.toFixed(0)}ms | Ort: ${(apiTotalTime / busesToTrack.length).toFixed(0)}ms/otobüs`);
-        console.log('========================================\n');
-
-        return {
-            data: results,
-            performance: {
-                totalApiTime: Math.round(apiTotalTime),
-                avgTimePerBus: Math.round(apiTotalTime / busesToTrack.length),
-                fromCache: false,
-                timestamp: new Date().toISOString()
-            }
-        };
-
-    } catch (error) {
-        console.error('[SCRAPER] Fatal error:', error);
-
-        return {
-            data: busesToTrack.map(bus => ({
-                id: bus.id, line: bus.line, stop: bus.stop,
-                found: false, time: 'Sunucu hatası',
-                perfStats: { totalTime: 0, fromCache: false }
-            })),
-            performance: { totalApiTime: 0, fromCache: false }
-        };
+        // Tarayıcılar arası küçük gecikme
+        await new Promise(r => setTimeout(r, 1000));
     }
 }
 
 // IPC mesaj dinleyici
 process.on('message', async (msg) => {
-    if (msg.action === 'scrape') {
-        try {
-            const result = await scrapeAllBuses();
-            if (process.send) process.send(result);
-        } catch (err) {
-            if (process.send) process.send({ error: err.message });
-        }
+    if (msg.action === 'start') {
+        startAllLoops();
     } else if (msg.action === 'update-buses') {
-        // Otobüs listesini güncelle
         if (msg.buses && Array.isArray(msg.buses)) {
+            // Eski tarayıcıları kapat
+            for (const [busId, browser] of activeBrowsers) {
+                try { await browser.close(); } catch (e) { }
+            }
+            activeBrowsers.clear();
+
+            // Yeni listeyi güncelle
             busesToTrack = msg.buses.map(bus => ({
                 id: bus.id,
                 line: bus.line,
-                stop: bus.stop,
-                url: `https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=${bus.stop}&hat_no=${bus.line}`
+                stop: bus.stop
             }));
-            console.log('[SCRAPER] Otobüs listesi güncellendi:', busesToTrack.length, 'otobüs');
+
+            console.log('[SCRAPER] Otobüs listesi güncellendi:', busesToTrack.length);
+
+            // Döngüleri yeniden başlat
+            startAllLoops();
         }
     } else if (msg.action === 'exit') {
-        if (browser) try { await browser.close(); } catch (e) { }
+        console.log('[SCRAPER] Kapatılıyor...');
+        for (const [busId, browser] of activeBrowsers) {
+            try { await browser.close(); } catch (e) { }
+        }
         process.exit(0);
     }
 });
@@ -293,3 +224,6 @@ process.on('message', async (msg) => {
 process.on('uncaughtException', (err) => {
     console.error('[SCRAPER] Uncaught:', err.message);
 });
+
+// Başlangıçta otomatik başlat
+startAllLoops();

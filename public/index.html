@@ -31,12 +31,12 @@
 
         <!-- Status Bar -->
         <footer class="status-bar">
-            <div class="status-item">
-                <span class="status-dot active"></span>
-                <span>Sistem Aktif</span>
+            <div class="status-item" id="connection-status">
+                <span class="status-dot" id="ws-dot"></span>
+                <span id="ws-status">Bağlanıyor...</span>
             </div>
             <div class="status-item" id="perf-display">
-                <span>⏱️ Yükleniyor...</span>
+                <span>⏱️ Gerçek zamanlı</span>
             </div>
         </footer>
     </div>
@@ -50,7 +50,6 @@
             </div>
             <div class="modal-body">
                 <div class="bus-list" id="bus-list">
-                    <!-- Otobüs listesi buraya gelecek -->
                 </div>
                 <div class="add-bus-form">
                     <h3>Yeni Otobüs Ekle</h3>
@@ -122,8 +121,12 @@
         const container = document.getElementById('app-container');
         const lastUpdateElement = document.getElementById('last-update');
         const clockElement = document.getElementById('clock');
-        const perfDisplay = document.getElementById('perf-display');
         const editModal = document.getElementById('edit-modal');
+        const wsStatusDot = document.getElementById('ws-dot');
+        const wsStatusText = document.getElementById('ws-status');
+
+        let ws = null;
+        let wsReconnectTimer = null;
 
         // Mouse gizleme - 5 saniye hareketsizlik
         let mouseTimer;
@@ -183,51 +186,97 @@
             });
         }
 
-        async function updateBusTimes() {
+        // WebSocket bağlantısı
+        function connectWebSocket() {
+            const wsUrl = `ws://localhost:3001`;
+
             try {
-                const response = await fetch('/api/bustimes');
-                if (!response.ok) throw new Error('Sunucu yanıt vermiyor.');
+                ws = new WebSocket(wsUrl);
 
-                const result = await response.json();
-                const data = result.data;
-                const perf = result.performance;
+                ws.onopen = () => {
+                    console.log('[WS] Bağlandı');
+                    wsStatusDot.className = 'status-dot active';
+                    wsStatusText.textContent = 'Bağlı';
 
-                data.forEach(busData => {
-                    const card = document.getElementById(busData.id);
-                    if (card) {
-                        const arrivalTime = card.querySelector('.arrival-time');
-                        const statusIndicator = card.querySelector('.status-indicator');
-
-                        card.classList.remove('loading', 'active', 'inactive');
-                        arrivalTime.classList.remove('loading');
-
-                        if (busData.found) {
-                            card.classList.add('active');
-                            arrivalTime.textContent = busData.time;
-                            statusIndicator.innerHTML = '<span class="pulse active"></span>';
-                            statusIndicator.className = 'status-indicator active';
-                        } else {
-                            card.classList.add('inactive');
-                            arrivalTime.textContent = busData.time || 'Sefer Yok';
-                            statusIndicator.innerHTML = '';
-                            statusIndicator.className = 'status-indicator inactive';
-                        }
+                    if (wsReconnectTimer) {
+                        clearTimeout(wsReconnectTimer);
+                        wsReconnectTimer = null;
                     }
-                });
+                };
 
-                if (perf) {
-                    perfDisplay.innerHTML = `<span>⏱️ ${(perf.totalApiTime / 1000).toFixed(1)}s</span>`;
-                }
+                ws.onmessage = (event) => {
+                    try {
+                        const msg = JSON.parse(event.data);
 
-                updateLastUpdateTime();
+                        if (msg.type === 'bus-data') {
+                            updateBusCard(msg.busId, msg.data);
+                            updateLastUpdateTime();
+                        } else if (msg.type === 'bus-status') {
+                            updateBusStatus(msg.busId, msg.status, msg.message);
+                        }
+                    } catch (err) {
+                        console.error('[WS] Parse error:', err);
+                    }
+                };
 
-            } catch (error) {
-                console.error('Hata:', error);
-                document.querySelectorAll('.bus-card').forEach(card => {
-                    card.classList.remove('loading', 'active');
-                    card.classList.add('inactive');
-                    card.querySelector('.arrival-time').textContent = 'Hata!';
-                });
+                ws.onclose = () => {
+                    console.log('[WS] Bağlantı kapandı');
+                    wsStatusDot.className = 'status-dot';
+                    wsStatusText.textContent = 'Bağlantı kesildi';
+
+                    // 3 saniye sonra yeniden bağlan
+                    wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+                };
+
+                ws.onerror = (err) => {
+                    console.error('[WS] Hata:', err);
+                    wsStatusDot.className = 'status-dot';
+                    wsStatusText.textContent = 'Hata';
+                };
+
+            } catch (err) {
+                console.error('[WS] Bağlantı hatası:', err);
+                wsReconnectTimer = setTimeout(connectWebSocket, 3000);
+            }
+        }
+
+        function updateBusCard(busId, data) {
+            const card = document.getElementById(busId);
+            if (!card) return;
+
+            const arrivalTime = card.querySelector('.arrival-time');
+            const statusIndicator = card.querySelector('.status-indicator');
+
+            card.classList.remove('loading', 'active', 'inactive');
+            arrivalTime.classList.remove('loading');
+
+            if (data.found) {
+                card.classList.add('active');
+                arrivalTime.textContent = data.time;
+                statusIndicator.innerHTML = '<span class="pulse active"></span>';
+                statusIndicator.className = 'status-indicator active';
+            } else {
+                card.classList.add('inactive');
+                arrivalTime.textContent = data.time || 'Sefer Yok';
+                statusIndicator.innerHTML = '';
+                statusIndicator.className = 'status-indicator inactive';
+            }
+        }
+
+        function updateBusStatus(busId, status, message) {
+            const card = document.getElementById(busId);
+            if (!card) return;
+
+            const statusIndicator = card.querySelector('.status-indicator');
+
+            if (status === 'loading' || status === 'clicking' || status === 'starting') {
+                card.classList.remove('active', 'inactive');
+                card.classList.add('loading');
+                statusIndicator.innerHTML = '<span class="pulse"></span>';
+                statusIndicator.className = 'status-indicator loading';
+            } else if (status === 'error' || status === 'waiting') {
+                statusIndicator.innerHTML = '';
+                statusIndicator.className = 'status-indicator inactive';
             }
         }
 
@@ -282,7 +331,6 @@
         }
 
         function saveAndReload() {
-            // ID'leri yeniden ata
             buses = buses.map((bus, index) => ({
                 ...bus,
                 id: 'bus-' + (index + 1)
@@ -290,7 +338,6 @@
 
             localStorage.setItem('buses', JSON.stringify(buses));
 
-            // Sunucuya yeni otobüs listesini gönder
             fetch('/api/update-buses', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
@@ -298,7 +345,6 @@
             }).then(() => {
                 closeModal();
                 initializeCards();
-                updateBusTimes();
             }).catch(err => {
                 alert('Kaydetme hatası: ' + err.message);
             });
@@ -306,8 +352,7 @@
 
         document.addEventListener('DOMContentLoaded', () => {
             initializeCards();
-            updateBusTimes();
-            setInterval(updateBusTimes, 20000);
+            connectWebSocket();
         });
 
         // Info Modal fonksiyonları

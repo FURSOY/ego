@@ -20,7 +20,8 @@
     "express": "^5.1.0",
     "puppeteer": "^24.20.0",
     "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2"
+    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "electron": "^32.0.0",
