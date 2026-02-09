@@ -258,6 +258,44 @@ body {
     color: var(--text-secondary);
 }
 
+/* Progress Bar */
+.progress-container {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+}
+
+.progress-bar {
+    height: 8px;
+    background: var(--accent-primary);
+    border-radius: 4px;
+    transition: width 0.3s ease;
+    min-width: 0;
+}
+
+.progress-text {
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent-primary);
+    min-width: 40px;
+}
+
+.status-downloading {
+    color: var(--accent-primary) !important;
+}
+
+#download-progress-row .info-label {
+    min-width: 60px;
+}
+
+#download-progress-row .progress-container {
+    background: var(--border-color);
+    border-radius: 4px;
+    padding: 2px;
+    flex: 1;
+}
+
 .dashboard {
     display: flex;
     flex-direction: column;

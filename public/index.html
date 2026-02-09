@@ -93,6 +93,13 @@
                         <span class="info-label">Yeni Sürüm</span>
                         <span class="info-value" id="update-version">-</span>
                     </div>
+                    <div class="info-row" id="download-progress-row" style="display: none;">
+                        <span class="info-label">İndirme</span>
+                        <div class="progress-container">
+                            <div class="progress-bar" id="download-progress-bar"></div>
+                            <span class="progress-text" id="download-progress-text">0%</span>
+                        </div>
+                    </div>
                     <div class="info-row">
                         <span class="info-label">Son Kontrol</span>
                         <span class="info-value" id="last-check">-</span>
@@ -380,10 +387,24 @@
                 const statusEl = document.getElementById('update-status');
                 const versionRow = document.getElementById('update-version-row');
                 const installBtn = document.getElementById('install-update-btn');
+                const progressRow = document.getElementById('download-progress-row');
+                const progressBar = document.getElementById('download-progress-bar');
+                const progressText = document.getElementById('download-progress-text');
+
+                // Progress bar varsayılan olarak gizli
+                progressRow.style.display = 'none';
 
                 if (status.checking) {
                     statusEl.textContent = 'Kontrol ediliyor...';
                     statusEl.className = 'info-value status-checking';
+                } else if (status.downloading) {
+                    statusEl.textContent = 'İndiriliyor...';
+                    statusEl.className = 'info-value status-downloading';
+                    versionRow.style.display = 'flex';
+                    document.getElementById('update-version').textContent = 'v' + status.version;
+                    progressRow.style.display = 'flex';
+                    progressBar.style.width = status.downloadProgress + '%';
+                    progressText.textContent = status.downloadProgress + '%';
                 } else if (status.downloaded) {
                     statusEl.textContent = 'İndirildi, yeniden başlatmayı bekliyor';
                     statusEl.className = 'info-value status-ready';

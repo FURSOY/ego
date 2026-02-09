@@ -23,6 +23,8 @@ const busDataCache = new Map();
 let updateStatus = {
     checking: false,
     available: false,
+    downloading: false,
+    downloadProgress: 0,
     downloaded: false,
     version: null,
     error: null,
@@ -43,23 +45,35 @@ autoUpdater.on('update-available', (info) => {
     console.log('[UPDATE] Güncelleme mevcut:', info.version);
     updateStatus.checking = false;
     updateStatus.available = true;
+    updateStatus.downloading = true;
+    updateStatus.downloadProgress = 0;
     updateStatus.version = info.version;
+});
+
+autoUpdater.on('download-progress', (progress) => {
+    console.log(`[UPDATE] İndiriliyor: %${progress.percent.toFixed(1)}`);
+    updateStatus.downloading = true;
+    updateStatus.downloadProgress = Math.round(progress.percent);
 });
 
 autoUpdater.on('update-not-available', () => {
     console.log('[UPDATE] Uygulama güncel.');
     updateStatus.checking = false;
     updateStatus.available = false;
+    updateStatus.downloading = false;
 });
 
 autoUpdater.on('update-downloaded', (info) => {
     console.log('[UPDATE] Güncelleme indirildi:', info.version);
+    updateStatus.downloading = false;
+    updateStatus.downloadProgress = 100;
     updateStatus.downloaded = true;
 });
 
 autoUpdater.on('error', (err) => {
     console.log('[UPDATE] Güncelleme hatası:', err.message);
     updateStatus.checking = false;
+    updateStatus.downloading = false;
     updateStatus.error = err.message;
 });
 
