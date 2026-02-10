@@ -21,12 +21,12 @@
             </div>
         </header>
 
-        <!-- Bus Cards Container -->
-        <main class="cards-container" id="app-container">
+        <!-- Durak Sütunları -->
+        <main class="stops-container" id="stops-container">
         </main>
 
         <!-- Status Bar -->
-        <footer class="status-bar">
+        <footer class="status-bar" style="display: none;">
             <div class="status-item" id="connection-status">
                 <span class="status-dot" id="ws-dot"></span>
                 <span id="ws-status">Bağlanıyor...</span>
@@ -38,18 +38,17 @@
     <div class="modal-overlay" id="edit-modal">
         <div class="modal">
             <div class="modal-header">
-                <h2>Otobüs Düzenle</h2>
+                <h2>Durak Düzenle</h2>
                 <button class="modal-close" onclick="closeModal()">✕</button>
             </div>
             <div class="modal-body">
-                <div class="bus-list" id="bus-list">
+                <div class="bus-list" id="stop-list">
                 </div>
                 <div class="add-bus-form">
-                    <h3>Yeni Otobüs Ekle</h3>
+                    <h3>Yeni Durak Ekle</h3>
                     <div class="form-row">
-                        <input type="text" id="new-line" placeholder="Hat No (örn: 561)">
                         <input type="text" id="new-stop" placeholder="Durak No (örn: 50782)">
-                        <button class="btn btn-add" onclick="addBus()">+ Ekle</button>
+                        <button class="btn btn-add" onclick="addStop()">+ Ekle</button>
                     </div>
                 </div>
             </div>
@@ -59,7 +58,7 @@
         </div>
     </div>
 
-    <!-- Info Modal (Q tuşu) -->
+    <!-- Info Modal -->
     <div class="modal-overlay" id="info-modal">
         <div class="modal">
             <div class="modal-header">
@@ -105,21 +104,60 @@
                 </div>
             </div>
             <div class="modal-footer">
-                <span class="info-hint">E: Otobüs Düzenle | F: Tam Ekran</span>
+                <span class="info-hint">E: Durak Düzenle | F: Tam Ekran</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h2>Ayarlar</h2>
+                <button class="modal-close" onclick="closeSettingsModal()">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="info-section">
+                    <h3 class="settings-title">Veri Ayarları</h3>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <span class="setting-label">Kaybolma Eşiği</span>
+                            <span class="setting-desc">Otobüs kaç çekişte görünmezse silinsin</span>
+                        </div>
+                        <input type="number" id="setting-miss-count" class="setting-input" min="1" max="50" value="10">
+                    </div>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <span class="setting-label">Çekim Arası Bekleme (ms)</span>
+                            <span class="setting-desc">Her buton tıklaması arasındaki bekleme</span>
+                        </div>
+                        <input type="number" id="setting-scrape-delay" class="setting-input" min="100" max="10000"
+                            step="100" value="500">
+                    </div>
+                </div>
+                <div class="info-section">
+                    <h3 class="settings-title">Görünüm</h3>
+                    <div class="setting-item">
+                        <div class="setting-info">
+                            <span class="setting-label">Mouse Gizleme Süresi (sn)</span>
+                            <span class="setting-desc">Hareketsizlik sonrası mouse gizlenir</span>
+                        </div>
+                        <input type="number" id="setting-cursor-timeout" class="setting-input" min="1" max="60"
+                            value="5">
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-save" onclick="saveSettings()">Kaydet</button>
             </div>
         </div>
     </div>
 
     <script>
-        // LocalStorage'dan otobüsleri yükle veya varsayılan kullan
-        let buses = JSON.parse(localStorage.getItem('buses')) || [
-            { id: 'bus-1', line: '561', stop: '50782' },
-            { id: 'bus-2', line: '561', stop: '50781' },
-            { id: 'bus-3', line: '561', stop: '50780' }
-        ];
+        // LocalStorage'dan durakları yükle
+        let stops = JSON.parse(localStorage.getItem('stops')) || ['50782', '50781', '50780'];
 
-        const container = document.getElementById('app-container');
-        const lastUpdateElement = document.getElementById('last-update');
+        const stopsContainer = document.getElementById('stops-container');
         const clockElement = document.getElementById('clock');
         const editModal = document.getElementById('edit-modal');
         const wsStatusDot = document.getElementById('ws-dot');
@@ -128,76 +166,182 @@
         let ws = null;
         let wsReconnectTimer = null;
 
-        // Mouse gizleme - 5 saniye hareketsizlik
-        let mouseTimer;
-        let cursorHidden = false;
+        // Ayarları yükle
+        const defaultSettings = { missCount: 10, scrapeDelay: 500, cursorTimeout: 5 };
+        let settings = JSON.parse(localStorage.getItem('settings')) || { ...defaultSettings };
 
+        // Kaybolma koruması: stopId -> { line -> { data, missCount } }
+        const busTracking = new Map();
+        // Pulse timeout: her durak için timer
+        const pulseTimers = new Map();
+
+        // Mouse gizleme
+        let mouseTimer;
         function showCursor() {
             document.body.style.cursor = 'default';
-            cursorHidden = false;
             clearTimeout(mouseTimer);
-            mouseTimer = setTimeout(hideCursor, 5000);
+            mouseTimer = setTimeout(() => { document.body.style.cursor = 'none'; }, (settings.cursorTimeout || 5) * 1000);
         }
-
-        function hideCursor() {
-            document.body.style.cursor = 'none';
-            cursorHidden = true;
-        }
-
         document.addEventListener('mousemove', showCursor);
         document.addEventListener('mousedown', showCursor);
-        mouseTimer = setTimeout(hideCursor, 5000);
+        mouseTimer = setTimeout(() => { document.body.style.cursor = 'none'; }, (settings.cursorTimeout || 5) * 1000);
 
-        // Saat güncellemesi
+        // Saat
         function updateClock() {
-            const now = new Date();
-            clockElement.textContent = now.toLocaleTimeString('tr-TR');
+            clockElement.textContent = new Date().toLocaleTimeString('tr-TR');
         }
         setInterval(updateClock, 1000);
         updateClock();
 
-        function updateLastUpdateTime() {
-            const now = new Date();
-            lastUpdateElement.textContent = now.toLocaleTimeString('tr-TR');
-        }
-
-        function initializeCards() {
-            container.innerHTML = '';
-            buses.forEach(bus => {
-                const card = document.createElement('div');
-                card.className = 'bus-card loading';
-                card.id = bus.id;
-                card.innerHTML = `
-                    <div class="card-header">
-                        <div class="line-badge">${bus.line}</div>
-                        <div class="status-indicator loading">
+        // Sütunları oluştur
+        function initializeColumns() {
+            stopsContainer.innerHTML = '';
+            stops.forEach(stopId => {
+                const column = document.createElement('div');
+                column.className = 'stop-column';
+                column.id = `stop-${stopId}`;
+                column.innerHTML = `
+                    <div class="stop-header">
+                        <span class="stop-badge">Durak ${stopId}</span>
+                        <span class="stop-status" id="status-${stopId}">
                             <span class="pulse"></span>
+                        </span>
+                    </div>
+                    <div class="bus-rows" id="rows-${stopId}">
+                        <div class="bus-row loading-row">
+                            <span class="loading-text">Yükleniyor...</span>
                         </div>
                     </div>
-                    <div class="card-body">
-                        <div class="arrival-time loading">--:--</div>
-                        <div class="arrival-label">Tahmini Varış</div>
-                    </div>
-                    <div class="card-footer">
-                        <span class="stop-info">Durak: ${bus.stop}</span>
-                    </div>
                 `;
-                container.appendChild(card);
+                stopsContainer.appendChild(column);
+
+                // Tracking başlat
+                busTracking.set(stopId, new Map());
             });
         }
 
-        // WebSocket bağlantısı
-        function connectWebSocket() {
-            const wsUrl = `ws://localhost:3001`;
+        // Otobüs satırlarını güncelle (kaybolma koruması ile)
+        function updateStopData(stopId, buses) {
+            const rowsContainer = document.getElementById(`rows-${stopId}`);
+            const statusEl = document.getElementById(`status-${stopId}`);
+            if (!rowsContainer || !statusEl) return;
 
+            let tracking = busTracking.get(stopId);
+            if (!tracking) {
+                tracking = new Map();
+                busTracking.set(stopId, tracking);
+            }
+
+            // Mevcut otobüsleri işaretle
+            const currentLines = new Set(buses.map(b => b.line));
+
+            // Yeni gelen otobüsleri güncelle
+            for (const bus of buses) {
+                tracking.set(bus.line, {
+                    data: bus,
+                    missCount: 0
+                });
+            }
+
+            // Gelmeyen otobüslerin miss sayacını artır
+            for (const [line, entry] of tracking) {
+                if (!currentLines.has(line)) {
+                    entry.missCount++;
+                    if (entry.missCount >= (settings.missCount || 10)) {
+                        tracking.delete(line);
+                    }
+                }
+            }
+
+            // Satırları oluştur
+            const allBuses = Array.from(tracking.values())
+                .sort((a, b) => {
+                    // Dakikayı parse et ve sırala
+                    const timeA = parseMinutes(a.data.time);
+                    const timeB = parseMinutes(b.data.time);
+                    return timeA - timeB;
+                });
+
+            if (allBuses.length === 0) {
+                rowsContainer.innerHTML = `
+                    <div class="bus-row empty-row">
+                        <span class="empty-text">Sefer bulunamadı</span>
+                    </div>
+                `;
+                statusEl.innerHTML = '';
+                return;
+            }
+
+            statusEl.innerHTML = `<span class="pulse active"></span>`;
+
+            // 10sn veri gelmezse kırmızı yap
+            if (pulseTimers.has(stopId)) clearTimeout(pulseTimers.get(stopId));
+            pulseTimers.set(stopId, setTimeout(() => {
+                statusEl.innerHTML = `<span class="pulse error"></span>`;
+            }, 10000));
+
+            // Önceki değerleri kontrol et
+            const prevValues = new Map();
+            rowsContainer.querySelectorAll('.bus-row').forEach(row => {
+                const lineEl = row.querySelector('.bus-line');
+                const timeEl = row.querySelector('.bus-time');
+                if (lineEl && timeEl) {
+                    prevValues.set(lineEl.textContent.trim(), timeEl.textContent.trim());
+                }
+            });
+
+            rowsContainer.innerHTML = allBuses.map(entry => {
+                const bus = entry.data;
+                const fading = entry.missCount > 0;
+                const prevTime = prevValues.get(bus.line);
+                const changed = prevTime && prevTime !== bus.time;
+                return `
+                    <div class="bus-row ${fading ? 'fading' : ''}">
+                        <div class="bus-info">
+                            <div class="bus-line">${bus.line}</div>
+                            <div class="bus-name">${bus.lineName || ''}</div>
+                        </div>
+                        <div class="bus-time ${changed ? 'changed' : ''}" data-line="${bus.line}">${bus.time}</div>
+                    </div>
+                `;
+            }).join('');
+
+            // 1 saniye sonra yeşil efekti kaldır
+            if (rowsContainer.querySelector('.bus-time.changed')) {
+                setTimeout(() => {
+                    rowsContainer.querySelectorAll('.bus-time.changed').forEach(el => {
+                        el.classList.remove('changed');
+                    });
+                }, 1000);
+            }
+        }
+
+        // Durak status göstergesi
+        function updateStopStatus(stopId, status) {
+            const statusEl = document.getElementById(`status-${stopId}`);
+            if (!statusEl) return;
+            if (status === 'active') {
+                statusEl.innerHTML = `<span class="pulse active"></span>`;
+            } else {
+                statusEl.innerHTML = `<span class="pulse error"></span>`;
+            }
+        }
+
+        // Dakikayı parse et (sıralama için)
+        function parseMinutes(timeStr) {
+            const match = timeStr.match(/(\d+)\s*dk/);
+            if (match) return parseInt(match[1]);
+            return 999;
+        }
+
+        // WebSocket
+        function connectWebSocket() {
             try {
-                ws = new WebSocket(wsUrl);
+                ws = new WebSocket('ws://localhost:3001');
 
                 ws.onopen = () => {
-                    console.log('[WS] Bağlandı');
                     wsStatusDot.className = 'status-dot active';
                     wsStatusText.textContent = 'Bağlı';
-
                     if (wsReconnectTimer) {
                         clearTimeout(wsReconnectTimer);
                         wsReconnectTimer = null;
@@ -207,83 +351,31 @@
                 ws.onmessage = (event) => {
                     try {
                         const msg = JSON.parse(event.data);
-
-                        if (msg.type === 'bus-data') {
-                            updateBusCard(msg.busId, msg.data);
-                            updateLastUpdateTime();
-                        } else if (msg.type === 'bus-status') {
-                            updateBusStatus(msg.busId, msg.status, msg.message);
+                        if (msg.type === 'stop-data') {
+                            updateStopData(msg.stopId, msg.buses);
                         }
-                    } catch (err) {
-                        console.error('[WS] Parse error:', err);
-                    }
+                    } catch (err) { }
                 };
 
                 ws.onclose = () => {
-                    console.log('[WS] Bağlantı kapandı');
                     wsStatusDot.className = 'status-dot';
                     wsStatusText.textContent = 'Bağlantı kesildi';
-
-                    // 3 saniye sonra yeniden bağlan
                     wsReconnectTimer = setTimeout(connectWebSocket, 3000);
                 };
 
-                ws.onerror = (err) => {
-                    console.error('[WS] Hata:', err);
+                ws.onerror = () => {
                     wsStatusDot.className = 'status-dot';
                     wsStatusText.textContent = 'Hata';
                 };
-
             } catch (err) {
-                console.error('[WS] Bağlantı hatası:', err);
                 wsReconnectTimer = setTimeout(connectWebSocket, 3000);
-            }
-        }
-
-        function updateBusCard(busId, data) {
-            const card = document.getElementById(busId);
-            if (!card) return;
-
-            const arrivalTime = card.querySelector('.arrival-time');
-            const statusIndicator = card.querySelector('.status-indicator');
-
-            card.classList.remove('loading', 'active', 'inactive');
-            arrivalTime.classList.remove('loading');
-
-            if (data.found) {
-                card.classList.add('active');
-                arrivalTime.textContent = data.time;
-                statusIndicator.innerHTML = '<span class="pulse active"></span>';
-                statusIndicator.className = 'status-indicator active';
-            } else {
-                card.classList.add('inactive');
-                arrivalTime.textContent = data.time || 'Sefer Yok';
-                statusIndicator.innerHTML = '';
-                statusIndicator.className = 'status-indicator inactive';
-            }
-        }
-
-        function updateBusStatus(busId, status, message) {
-            const card = document.getElementById(busId);
-            if (!card) return;
-
-            const statusIndicator = card.querySelector('.status-indicator');
-
-            if (status === 'loading' || status === 'clicking' || status === 'starting') {
-                card.classList.remove('active', 'inactive');
-                card.classList.add('loading');
-                statusIndicator.innerHTML = '<span class="pulse"></span>';
-                statusIndicator.className = 'status-indicator loading';
-            } else if (status === 'error' || status === 'waiting') {
-                statusIndicator.innerHTML = '';
-                statusIndicator.className = 'status-indicator inactive';
             }
         }
 
         // Modal fonksiyonları
         function openModal() {
             editModal.classList.add('active');
-            renderBusList();
+            renderStopList();
             showCursor();
         }
 
@@ -291,71 +383,64 @@
             editModal.classList.remove('active');
         }
 
-        function renderBusList() {
-            const busList = document.getElementById('bus-list');
-            busList.innerHTML = buses.map((bus, index) => `
+        function renderStopList() {
+            const stopList = document.getElementById('stop-list');
+            stopList.innerHTML = stops.map((stop, index) => `
                 <div class="bus-item">
                     <span class="bus-item-info">
-                        <strong>Hat ${bus.line}</strong> - Durak: ${bus.stop}
+                        <strong>Durak ${stop}</strong>
                     </span>
-                    <button class="btn btn-delete" onclick="deleteBus(${index})">Sil</button>
+                    <button class="btn btn-delete" onclick="deleteStop(${index})">Sil</button>
                 </div>
             `).join('');
         }
 
-        function addBus() {
-            const line = document.getElementById('new-line').value.trim();
+        function addStop() {
             const stop = document.getElementById('new-stop').value.trim();
-
-            if (!line || !stop) {
-                alert('Hat ve durak numarası giriniz!');
+            if (!stop) {
+                alert('Durak numarası giriniz!');
                 return;
             }
-
-            const newId = 'bus-' + Date.now();
-            buses.push({ id: newId, line, stop });
-
-            document.getElementById('new-line').value = '';
+            if (stops.includes(stop)) {
+                alert('Bu durak zaten ekli!');
+                return;
+            }
+            stops.push(stop);
             document.getElementById('new-stop').value = '';
-
-            renderBusList();
+            renderStopList();
         }
 
-        function deleteBus(index) {
-            if (buses.length <= 1) {
-                alert('En az bir otobüs olmalı!');
+        function deleteStop(index) {
+            if (stops.length <= 1) {
+                alert('En az bir durak olmalı!');
                 return;
             }
-            buses.splice(index, 1);
-            renderBusList();
+            stops.splice(index, 1);
+            renderStopList();
         }
 
         function saveAndReload() {
-            buses = buses.map((bus, index) => ({
-                ...bus,
-                id: 'bus-' + (index + 1)
-            }));
-
-            localStorage.setItem('buses', JSON.stringify(buses));
-
-            fetch('/api/update-buses', {
+            localStorage.setItem('stops', JSON.stringify(stops));
+            fetch('/api/update-stops', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(buses)
+                body: JSON.stringify(stops)
             }).then(() => {
                 closeModal();
-                initializeCards();
+                busTracking.clear();
+                initializeColumns();
             }).catch(err => {
                 alert('Kaydetme hatası: ' + err.message);
             });
         }
 
+        // DOMContentLoaded
         document.addEventListener('DOMContentLoaded', () => {
-            initializeCards();
+            initializeColumns();
             connectWebSocket();
         });
 
-        // Info Modal fonksiyonları
+        // Info Modal
         const infoModal = document.getElementById('info-modal');
 
         async function openInfoModal() {
@@ -372,7 +457,6 @@
             try {
                 const response = await fetch('/api/app-info');
                 const data = await response.json();
-
                 document.getElementById('app-version').textContent = 'v' + data.version;
                 document.getElementById('app-name').textContent = data.name || 'EGO Otobüs Takip';
 
@@ -383,8 +467,6 @@
                 const progressRow = document.getElementById('download-progress-row');
                 const progressBar = document.getElementById('download-progress-bar');
                 const progressText = document.getElementById('download-progress-text');
-
-                // Progress bar varsayılan olarak gizli
                 progressRow.style.display = 'none';
 
                 if (status.checking) {
@@ -413,13 +495,9 @@
                 }
 
                 if (status.lastCheck) {
-                    const date = new Date(status.lastCheck);
-                    document.getElementById('last-check').textContent = date.toLocaleTimeString('tr-TR');
+                    document.getElementById('last-check').textContent = new Date(status.lastCheck).toLocaleTimeString('tr-TR');
                 }
-
-            } catch (error) {
-                console.error('App info yüklenemedi:', error);
-            }
+            } catch (error) { }
         }
 
         async function checkForUpdates() {
@@ -427,9 +505,7 @@
             try {
                 await fetch('/api/check-update', { method: 'POST' });
                 setTimeout(loadAppInfo, 2000);
-            } catch (error) {
-                console.error('Güncelleme kontrolü başarısız:', error);
-            }
+            } catch (error) { }
         }
 
         async function installUpdate() {
@@ -438,47 +514,62 @@
             }
         }
 
+        // Settings Modal
+        const settingsModal = document.getElementById('settings-modal');
+
+        function openSettingsModal() {
+            settingsModal.classList.add('active');
+            showCursor();
+            document.getElementById('setting-miss-count').value = settings.missCount || 10;
+            document.getElementById('setting-scrape-delay').value = settings.scrapeDelay || 500;
+            document.getElementById('setting-cursor-timeout').value = settings.cursorTimeout || 5;
+        }
+
+        function closeSettingsModal() {
+            settingsModal.classList.remove('active');
+        }
+
+        function saveSettings() {
+            settings.missCount = parseInt(document.getElementById('setting-miss-count').value) || 10;
+            settings.scrapeDelay = parseInt(document.getElementById('setting-scrape-delay').value) || 500;
+            settings.cursorTimeout = parseInt(document.getElementById('setting-cursor-timeout').value) || 5;
+            localStorage.setItem('settings', JSON.stringify(settings));
+            closeSettingsModal();
+        }
+
         // Klavye kısayolları
         document.addEventListener('keydown', (e) => {
-            const anyModalOpen = editModal.classList.contains('active') || infoModal.classList.contains('active');
+            const anyModalOpen = editModal.classList.contains('active') || infoModal.classList.contains('active') || settingsModal.classList.contains('active');
 
-            // F tuşu - tam ekran
             if (e.key === 'f' || e.key === 'F') {
                 if (!anyModalOpen) {
-                    if (!document.fullscreenElement) {
-                        document.documentElement.requestFullscreen();
-                    } else {
-                        document.exitFullscreen();
-                    }
+                    if (!document.fullscreenElement) document.documentElement.requestFullscreen();
+                    else document.exitFullscreen();
                 }
             }
 
-            // E tuşu - düzenleme paneli
             if (e.key === 'e' || e.key === 'E') {
-                if (!infoModal.classList.contains('active')) {
-                    if (editModal.classList.contains('active')) {
-                        closeModal();
-                    } else {
-                        openModal();
-                    }
+                if (!anyModalOpen || editModal.classList.contains('active')) {
+                    editModal.classList.contains('active') ? closeModal() : openModal();
                 }
             }
 
-            // Q tuşu - özellikler paneli
             if (e.key === 'q' || e.key === 'Q') {
-                if (!editModal.classList.contains('active')) {
-                    if (infoModal.classList.contains('active')) {
-                        closeInfoModal();
-                    } else {
-                        openInfoModal();
-                    }
+                if (!anyModalOpen || infoModal.classList.contains('active')) {
+                    infoModal.classList.contains('active') ? closeInfoModal() : openInfoModal();
                 }
             }
 
-            // ESC tuşu - modalları kapat
+            if (e.key === 's' || e.key === 'S') {
+                if (!anyModalOpen || settingsModal.classList.contains('active')) {
+                    settingsModal.classList.contains('active') ? closeSettingsModal() : openSettingsModal();
+                }
+            }
+
             if (e.key === 'Escape') {
                 closeModal();
                 closeInfoModal();
+                closeSettingsModal();
             }
         });
     </script>

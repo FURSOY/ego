@@ -3,34 +3,30 @@ const StealthPlugin = require('puppeteer-extra-plugin-stealth');
 
 puppeteer.use(StealthPlugin());
 
-// Varsayılan otobüsler
-let busesToTrack = [
-    { id: 'bus-1', line: '561', stop: '50782' },
-    { id: 'bus-2', line: '561', stop: '50781' },
-    { id: 'bus-3', line: '561', stop: '50780' }
-];
+// Varsayılan duraklar
+let stopsToTrack = ['50782', '50781', '50780'];
 
 // Aktif tarayıcılar
 const activeBrowsers = new Map();
 
-// Veri gönderme fonksiyonu
-function sendData(busId, data) {
+// Veri gönderme
+function sendData(stopId, buses) {
     if (process.send) {
         process.send({
-            type: 'bus-data',
-            busId,
-            data,
+            type: 'stop-data',
+            stopId,
+            buses,
             timestamp: new Date().toISOString()
         });
     }
 }
 
-// Durum gönderme fonksiyonu
-function sendStatus(busId, status, message = '') {
+// Durum gönderme
+function sendStatus(stopId, status, message = '') {
     if (process.send) {
         process.send({
-            type: 'bus-status',
-            busId,
+            type: 'stop-status',
+            stopId,
             status,
             message,
             timestamp: new Date().toISOString()
@@ -39,25 +35,67 @@ function sendStatus(busId, status, message = '') {
 }
 
 // URL oluştur
-function buildUrl(bus) {
-    return `https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=${bus.stop}&hat_no=${bus.line}`;
+function buildUrl(stopId) {
+    return `https://www.ego.gov.tr/tr/otobusnerede/index?durak_no=${stopId}&hat_no=`;
 }
 
-// Tek otobüs için sürekli döngü
-async function startBusLoop(bus) {
+// Tabloyu parse et - tüm otobüsleri çek
+async function parseAllBuses(page) {
+    return await page.evaluate(() => {
+        const results = [];
+
+        // Gerçek tablo class'ı "list"
+        const rows = document.querySelectorAll('table.list tr');
+
+        let currentLine = null;
+        let currentLineName = null;
+
+        for (const row of rows) {
+            const cells = row.querySelectorAll('td');
+
+            // Hat bilgisi satırı: 2 hücre, font-weight:bold
+            if (cells.length === 2 && cells[0].style.fontWeight === 'bold') {
+                currentLine = cells[0].textContent.trim();
+                currentLineName = cells[1].textContent.trim();
+                continue;
+            }
+
+            // Varış süresi satırı: colspan=2, kırmızı bold text
+            const timeEl = row.querySelector('b[style*="color"]');
+            if (timeEl && currentLine) {
+                const timeText = timeEl.textContent.trim();
+                const cleanTime = timeText.replace('Tahmini Varış Süresi: ', '').replace('Tahmini Varış Süresi:', '').trim();
+
+                results.push({
+                    line: currentLine,
+                    lineName: currentLineName || '',
+                    time: cleanTime
+                });
+
+                currentLine = null;
+                currentLineName = null;
+            }
+        }
+
+        return results;
+    });
+}
+
+// Tek durak için sürekli döngü
+async function startStopLoop(stopId) {
     let browser = null;
     let page = null;
     let consecutiveErrors = 0;
     const MAX_ERRORS = 3;
 
-    console.log(`[${bus.id}] Döngü başlatılıyor...`);
-    sendStatus(bus.id, 'starting', 'Tarayıcı başlatılıyor');
+    console.log(`[${stopId}] Döngü başlatılıyor...`);
+    sendStatus(stopId, 'starting', 'Tarayıcı başlatılıyor');
 
     while (true) {
         try {
-            // Tarayıcı yoksa veya kapalıysa başlat
+            // Tarayıcı yoksa başlat
             if (!browser || !browser.isConnected()) {
-                console.log(`[${bus.id}] Tarayıcı açılıyor...`);
+                console.log(`[${stopId}] Tarayıcı açılıyor...`);
 
                 browser = await puppeteer.launch({
                     headless: true,
@@ -71,100 +109,87 @@ async function startBusLoop(bus) {
                     ]
                 });
 
-                activeBrowsers.set(bus.id, browser);
+                activeBrowsers.set(stopId, browser);
                 page = await browser.newPage();
 
-                // Sayfa yükle
-                console.log(`[${bus.id}] Sayfa yükleniyor...`);
-                sendStatus(bus.id, 'loading', 'Sayfa yükleniyor');
+                console.log(`[${stopId}] Sayfa yükleniyor...`);
+                sendStatus(stopId, 'loading', 'Sayfa yükleniyor');
 
-                await page.goto(buildUrl(bus), {
+                await page.goto(buildUrl(stopId), {
                     waitUntil: 'networkidle2',
                     timeout: 30000
                 });
 
-                console.log(`[${bus.id}] Sayfa hazır!`);
+                console.log(`[${stopId}] Sayfa hazır!`);
             }
 
             // Buton tıkla
             const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
-            sendStatus(bus.id, 'clicking', 'Veri çekiliyor');
+            sendStatus(stopId, 'clicking', 'Veri çekiliyor');
 
             await page.waitForSelector(buttonSelector, { timeout: 10000, visible: true });
             await page.click(buttonSelector);
 
-            // Sonuç bekle
-            const timeSelector = 'b[style*="color: #B80000"]';
-
+            // Tablo sonucu bekle
             try {
-                await page.waitForSelector(timeSelector, { timeout: 15000 });
+                // Tablonun gelmesini bekle
+                await page.waitForSelector('table.list', { timeout: 15000 });
+                // Kısa bekleme - tablo dolsun
+                await new Promise(r => setTimeout(r, 2000));
 
-                const timeElement = await page.$(timeSelector);
-                if (timeElement) {
-                    const timeText = await page.evaluate(el => el.textContent, timeElement);
-                    const cleanTime = timeText.trim().replace('Tahmini Varış Süresi: ', '');
+                const buses = await parseAllBuses(page);
 
-                    console.log(`[${bus.id}] Veri: ${cleanTime}`);
-                    sendStatus(bus.id, 'active', cleanTime);
-                    sendData(bus.id, {
-                        found: true,
-                        time: cleanTime,
-                        line: bus.line,
-                        stop: bus.stop
-                    });
-
-                    consecutiveErrors = 0;
+                if (buses.length > 0) {
+                    console.log(`[${stopId}] ${buses.length} otobüs bulundu`);
+                    sendStatus(stopId, 'active', `${buses.length} otobüs`);
+                    sendData(stopId, buses);
+                } else {
+                    console.log(`[${stopId}] Otobüs bulunamadı`);
+                    sendStatus(stopId, 'empty', 'Sefer yok');
+                    sendData(stopId, []);
                 }
+
+                consecutiveErrors = 0;
             } catch (timeoutErr) {
-                // Otobüs bulunamadı
-                console.log(`[${bus.id}] Sefer yok`);
-                sendStatus(bus.id, 'inactive', 'Sefer Yok');
-                sendData(bus.id, {
-                    found: false,
-                    time: 'Sefer Yok',
-                    line: bus.line,
-                    stop: bus.stop
-                });
+                console.log(`[${stopId}] Tablo yüklenemedi`);
+                sendStatus(stopId, 'error', 'Tablo yüklenemedi');
+                // Boş veri gönderme - mevcut veriler korunsun
                 consecutiveErrors = 0;
             }
 
-            // Kısa bekleme - butona hemen tekrar tıkla
+            // Kısa bekleme - hemen tekrar tıkla
             await new Promise(r => setTimeout(r, 500));
 
         } catch (error) {
             consecutiveErrors++;
-            console.error(`[${bus.id}] Hata (${consecutiveErrors}/${MAX_ERRORS}):`, error.message);
-            sendStatus(bus.id, 'error', error.message);
+            console.error(`[${stopId}] Hata (${consecutiveErrors}/${MAX_ERRORS}):`, error.message);
+            sendStatus(stopId, 'error', error.message);
 
             if (consecutiveErrors >= MAX_ERRORS) {
-                console.log(`[${bus.id}] Çok fazla hata, 30 saniye bekleniyor...`);
-                sendStatus(bus.id, 'waiting', '30 saniye bekleniyor');
+                console.log(`[${stopId}] Çok fazla hata, 30 saniye bekleniyor...`);
+                sendStatus(stopId, 'waiting', '30 saniye bekleniyor');
 
-                // Tarayıcıyı kapat
                 if (browser) {
                     try { await browser.close(); } catch (e) { }
                     browser = null;
                     page = null;
-                    activeBrowsers.delete(bus.id);
+                    activeBrowsers.delete(stopId);
                 }
 
                 await new Promise(r => setTimeout(r, 30000));
                 consecutiveErrors = 0;
             } else {
-                // Kısa bekleme sonra tekrar dene
                 await new Promise(r => setTimeout(r, 3000));
 
-                // Sayfayı yeniden yükle
                 if (page && browser && browser.isConnected()) {
                     try {
                         await page.reload({ waitUntil: 'networkidle2', timeout: 30000 });
                     } catch (reloadErr) {
-                        // Tarayıcıyı yeniden başlat
                         if (browser) {
                             try { await browser.close(); } catch (e) { }
                             browser = null;
                             page = null;
-                            activeBrowsers.delete(bus.id);
+                            activeBrowsers.delete(stopId);
                         }
                     }
                 }
@@ -173,48 +198,37 @@ async function startBusLoop(bus) {
     }
 }
 
-// Tüm otobüs döngülerini başlat
+// Tüm durak döngülerini başlat
 async function startAllLoops() {
-    console.log('[SCRAPER] Tüm döngüler başlatılıyor...');
+    console.log('[SCRAPER] Tüm döngüler başlatılıyor:', stopsToTrack);
 
-    for (const bus of busesToTrack) {
-        // Her döngüyü ayrı promise olarak başlat (paralel)
-        startBusLoop(bus).catch(err => {
-            console.error(`[${bus.id}] Fatal error:`, err);
+    for (const stopId of stopsToTrack) {
+        startStopLoop(stopId).catch(err => {
+            console.error(`[${stopId}] Fatal error:`, err);
         });
 
-        // Tarayıcılar arası küçük gecikme
         await new Promise(r => setTimeout(r, 1000));
     }
 }
 
 // IPC mesaj dinleyici
 process.on('message', async (msg) => {
-    if (msg.action === 'start') {
-        startAllLoops();
-    } else if (msg.action === 'update-buses') {
-        if (msg.buses && Array.isArray(msg.buses)) {
+    if (msg.action === 'update-stops') {
+        if (msg.stops && Array.isArray(msg.stops)) {
             // Eski tarayıcıları kapat
-            for (const [busId, browser] of activeBrowsers) {
+            for (const [stopId, browser] of activeBrowsers) {
                 try { await browser.close(); } catch (e) { }
             }
             activeBrowsers.clear();
 
-            // Yeni listeyi güncelle
-            busesToTrack = msg.buses.map(bus => ({
-                id: bus.id,
-                line: bus.line,
-                stop: bus.stop
-            }));
+            stopsToTrack = msg.stops;
+            console.log('[SCRAPER] Durak listesi güncellendi:', stopsToTrack);
 
-            console.log('[SCRAPER] Otobüs listesi güncellendi:', busesToTrack.length);
-
-            // Döngüleri yeniden başlat
             startAllLoops();
         }
     } else if (msg.action === 'exit') {
         console.log('[SCRAPER] Kapatılıyor...');
-        for (const [busId, browser] of activeBrowsers) {
+        for (const [stopId, browser] of activeBrowsers) {
             try { await browser.close(); } catch (e) { }
         }
         process.exit(0);

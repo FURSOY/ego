@@ -16,8 +16,8 @@ let wsPort = 3001;
 let scraperProcess = null;
 let wss = null;
 
-// Son otobüs verileri (cache)
-const busDataCache = new Map();
+// Son durak verileri (cache)
+const stopDataCache = new Map();
 
 // Güncelleme durumu
 let updateStatus = {
@@ -31,18 +31,16 @@ let updateStatus = {
     lastCheck: null
 };
 
-// AutoUpdater yapılandırması
+// AutoUpdater
 autoUpdater.autoDownload = true;
 autoUpdater.autoInstallOnAppQuit = true;
 
 autoUpdater.on('checking-for-update', () => {
-    console.log('[UPDATE] Güncelleme kontrol ediliyor...');
     updateStatus.checking = true;
     updateStatus.lastCheck = new Date().toISOString();
 });
 
 autoUpdater.on('update-available', (info) => {
-    console.log('[UPDATE] Güncelleme mevcut:', info.version);
     updateStatus.checking = false;
     updateStatus.available = true;
     updateStatus.downloading = true;
@@ -51,79 +49,66 @@ autoUpdater.on('update-available', (info) => {
 });
 
 autoUpdater.on('download-progress', (progress) => {
-    console.log(`[UPDATE] İndiriliyor: %${progress.percent.toFixed(1)}`);
     updateStatus.downloading = true;
     updateStatus.downloadProgress = Math.round(progress.percent);
 });
 
 autoUpdater.on('update-not-available', () => {
-    console.log('[UPDATE] Uygulama güncel.');
     updateStatus.checking = false;
     updateStatus.available = false;
     updateStatus.downloading = false;
 });
 
 autoUpdater.on('update-downloaded', (info) => {
-    console.log('[UPDATE] Güncelleme indirildi:', info.version);
     updateStatus.downloading = false;
     updateStatus.downloadProgress = 100;
     updateStatus.downloaded = true;
 });
 
 autoUpdater.on('error', (err) => {
-    console.log('[UPDATE] Güncelleme hatası:', err.message);
     updateStatus.checking = false;
     updateStatus.downloading = false;
     updateStatus.error = err.message;
 });
 
-// WebSocket Server başlat
+// WebSocket Server
 function startWebSocketServer() {
     wss = new WebSocketServer({ port: wsPort });
 
     wss.on('connection', (ws) => {
-        console.log('[WS] Yeni bağlantı');
-
         // Mevcut cache'i gönder
-        for (const [busId, data] of busDataCache) {
+        for (const [stopId, data] of stopDataCache) {
             ws.send(JSON.stringify({
-                type: 'bus-data',
-                busId,
-                data,
+                type: 'stop-data',
+                stopId,
+                buses: data,
                 timestamp: new Date().toISOString()
             }));
         }
 
-        ws.on('close', () => {
-            console.log('[WS] Bağlantı kapandı');
-        });
+        ws.on('close', () => { });
     });
 
-    console.log(`[WS] WebSocket server ws://localhost:${wsPort} adresinde çalışıyor`);
+    console.log(`[WS] WebSocket server ws://localhost:${wsPort}`);
 }
 
-// Tüm bağlı client'lara veri gönder
 function broadcastToClients(message) {
     if (!wss) return;
-
     const data = JSON.stringify(message);
     wss.clients.forEach(client => {
-        if (client.readyState === 1) { // OPEN
-            client.send(data);
-        }
+        if (client.readyState === 1) client.send(data);
     });
 }
 
 function startScraper() {
-    console.log('[MAIN] Scraper process başlatılıyor...');
+    console.log('[MAIN] Scraper başlatılıyor...');
     scraperProcess = fork(path.join(__dirname, 'scraper.cjs'));
 
     scraperProcess.on('message', (msg) => {
-        // Scraper'dan gelen verileri WebSocket'e ilet
-        if (msg.type === 'bus-data') {
-            busDataCache.set(msg.busId, msg.data);
+        if (msg.type === 'stop-data') {
+            stopDataCache.set(msg.stopId, msg.buses);
             broadcastToClients(msg);
-        } else if (msg.type === 'bus-status') {
+        } else if (msg.type === 'stop-status') {
             broadcastToClients(msg);
         }
     });
@@ -133,54 +118,44 @@ function startScraper() {
     });
 
     scraperProcess.on('exit', (code) => {
-        console.log('[MAIN] Scraper exited with code:', code);
+        console.log('[MAIN] Scraper exited:', code);
         scraperProcess = null;
     });
-
-    return scraperProcess;
 }
 
 function startExpressServer() {
     const expressApp = express();
-
     expressApp.use(express.json());
     expressApp.use(express.static(path.join(__dirname, 'public')));
 
-    // Uygulama bilgisi endpoint'i
     expressApp.get('/api/app-info', (req, res) => {
         res.json({
             version: app.getVersion(),
             name: app.getName(),
-            updateStatus: updateStatus,
-            wsPort: wsPort
+            updateStatus,
+            wsPort
         });
     });
 
-    // Otobüs güncelleme endpoint'i
-    expressApp.post('/api/update-buses', (req, res) => {
-        console.log('[API] Otobüs listesi güncelleniyor:', req.body);
+    expressApp.post('/api/update-stops', (req, res) => {
+        console.log('[API] Durak listesi güncelleniyor:', req.body);
         try {
             if (scraperProcess) {
-                scraperProcess.send({ action: 'update-buses', buses: req.body });
+                scraperProcess.send({ action: 'update-stops', stops: req.body });
             }
             res.json({ success: true });
         } catch (error) {
-            console.error('[API] Güncelleme hatası:', error.message);
             res.status(500).json({ error: error.message });
         }
     });
 
-    // Güncelleme kontrol endpoint'i
     expressApp.post('/api/check-update', (req, res) => {
         autoUpdater.checkForUpdates();
         res.json({ success: true });
     });
 
-    // Güncellemeyi uygula endpoint'i
     expressApp.post('/api/install-update', (req, res) => {
-        if (updateStatus.downloaded) {
-            autoUpdater.quitAndInstall();
-        }
+        if (updateStatus.downloaded) autoUpdater.quitAndInstall();
         res.json({ success: updateStatus.downloaded });
     });
 
@@ -188,13 +163,12 @@ function startExpressServer() {
         res.json({
             status: 'ok',
             scraperRunning: scraperProcess !== null,
-            connectedClients: wss ? wss.clients.size : 0,
-            timestamp: new Date().toISOString()
+            connectedClients: wss ? wss.clients.size : 0
         });
     });
 
     expressApp.listen(serverPort, () => {
-        console.log(`[MAIN] Express sunucu http://localhost:${serverPort} adresinde çalışıyor`);
+        console.log(`[MAIN] Express http://localhost:${serverPort}`);
     });
 }
 
@@ -203,20 +177,14 @@ function createWindow() {
         width: 1200,
         height: 800,
         icon: path.join(__dirname, 'icon.png'),
-        webPreferences: {
-            nodeIntegration: false,
-            contextIsolation: true
-        },
+        webPreferences: { nodeIntegration: false, contextIsolation: true },
         autoHideMenuBar: true,
         frame: true,
         resizable: true
     });
 
     mainWindow.loadURL(`http://localhost:${serverPort}`);
-
-    mainWindow.on('closed', function () {
-        mainWindow = null;
-    });
+    mainWindow.on('closed', () => { mainWindow = null; });
 }
 
 const gotTheLock = app.requestSingleInstanceLock();
@@ -224,7 +192,7 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
     app.quit();
 } else {
-    app.on('second-instance', (event, commandLine, workingDirectory) => {
+    app.on('second-instance', () => {
         if (mainWindow) {
             if (mainWindow.isMinimized()) mainWindow.restore();
             mainWindow.focus();
@@ -238,33 +206,22 @@ if (!gotTheLock) {
 
         setTimeout(() => {
             createWindow();
-            // Başlangıçta güncelleme kontrol et
-            autoUpdater.checkForUpdates().catch(err => {
-                console.log('[UPDATE] Güncelleme kontrolü başarısız:', err.message);
-            });
+            autoUpdater.checkForUpdates().catch(() => { });
         }, 500);
 
-        app.on('activate', function () {
+        app.on('activate', () => {
             if (BrowserWindow.getAllWindows().length === 0) createWindow();
         });
     });
 }
 
-app.on('window-all-closed', function () {
-    if (scraperProcess) {
-        scraperProcess.send({ action: 'exit' });
-    }
-    if (wss) {
-        wss.close();
-    }
+app.on('window-all-closed', () => {
+    if (scraperProcess) scraperProcess.send({ action: 'exit' });
+    if (wss) wss.close();
     if (process.platform !== 'darwin') app.quit();
 });
 
 app.on('before-quit', () => {
-    if (scraperProcess) {
-        scraperProcess.send({ action: 'exit' });
-    }
-    if (wss) {
-        wss.close();
-    }
+    if (scraperProcess) scraperProcess.send({ action: 'exit' });
+    if (wss) wss.close();
 });
