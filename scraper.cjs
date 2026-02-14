@@ -1,10 +1,10 @@
-const puppeteer = require('puppeteer-extra');
-const StealthPlugin = require('puppeteer-extra-plugin-stealth');
-
-puppeteer.use(StealthPlugin());
+const puppeteer = require('puppeteer-core');
 
 // Varsayılan duraklar
 let stopsToTrack = ['50782', '50781', '50780'];
+
+// Chromium yolu (main process'ten gelecek)
+let browserExecutablePath = null;
 
 // Aktif tarayıcılar
 const activeBrowsers = new Map();
@@ -97,8 +97,16 @@ async function startStopLoop(stopId) {
             if (!browser || !browser.isConnected()) {
                 console.log(`[${stopId}] Tarayıcı açılıyor...`);
 
+                if (!browserExecutablePath) {
+                    console.error(`[${stopId}] Tarayıcı yolu bulunamadı!`);
+                    sendStatus(stopId, 'error', 'Tarayıcı bulunamadı');
+                    await new Promise(r => setTimeout(r, 5000));
+                    continue;
+                }
+
                 browser = await puppeteer.launch({
                     headless: true,
+                    executablePath: browserExecutablePath,
                     ignoreHTTPSErrors: true,
                     args: [
                         '--no-sandbox',
@@ -123,15 +131,61 @@ async function startStopLoop(stopId) {
                 console.log(`[${stopId}] Sayfa hazır!`);
             }
 
-            // Buton tıkla
-            const buttonSelector = 'input.btn.red[value="Otobus Nerede?"]';
+            // Buton tıkla - birden fazla yöntem dene
             sendStatus(stopId, 'clicking', 'Veri çekiliyor');
 
-            await page.waitForSelector(buttonSelector, { timeout: 10000, visible: true });
-            await page.click(buttonSelector);
+            let clicked = false;
 
-            // Tablo sonucu bekle
+            // Yöntem 1: Direkt selector ile tıkla
             try {
+                const selectors = [
+                    'input.btn.red[value="Otobus Nerede?"]',
+                    'input[type="button"][value="Otobus Nerede?"]',
+                    'input.btn.red',
+                    'input[onclick="OtobusNerede()"]'
+                ];
+
+                for (const sel of selectors) {
+                    try {
+                        await page.waitForSelector(sel, { timeout: 5000, visible: true });
+                        await page.click(sel);
+                        clicked = true;
+                        console.log(`[${stopId}] Buton tıklandı: ${sel}`);
+                        break;
+                    } catch (e) {
+                        // Sonraki selector'ı dene
+                    }
+                }
+            } catch (e) { }
+
+            // Yöntem 2: JavaScript ile OtobusNerede() fonksiyonunu çağır
+            if (!clicked) {
+                try {
+                    await page.evaluate(() => {
+                        if (typeof OtobusNerede === 'function') {
+                            // Form submit yerine AJAX ile sonuç al
+                            const durakNo = document.getElementById('durak_no');
+                            if (durakNo && durakNo.value) {
+                                document.forms['otobusnerede'].submit();
+                            }
+                        }
+                    });
+                    clicked = true;
+                    console.log(`[${stopId}] JS ile form submit edildi`);
+                } catch (e) {
+                    console.log(`[${stopId}] JS submit başarısız:`, e.message);
+                }
+            }
+
+            if (!clicked) {
+                throw new Error('Buton bulunamadı veya tıklanamadı');
+            }
+
+            // Tablo sonucu bekle (sayfa yeniden yüklenebilir)
+            try {
+                // Sayfa yeniden yüklenebilir, navigation bekle
+                await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 15000 }).catch(() => { });
+
                 // Tablonun gelmesini bekle
                 await page.waitForSelector('table.list', { timeout: 15000 });
                 // Kısa bekleme - tablo dolsun
@@ -201,6 +255,7 @@ async function startStopLoop(stopId) {
 // Tüm durak döngülerini başlat
 async function startAllLoops() {
     console.log('[SCRAPER] Tüm döngüler başlatılıyor:', stopsToTrack);
+    console.log('[SCRAPER] Tarayıcı yolu:', browserExecutablePath);
 
     for (const stopId of stopsToTrack) {
         startStopLoop(stopId).catch(err => {
@@ -213,7 +268,14 @@ async function startAllLoops() {
 
 // IPC mesaj dinleyici
 process.on('message', async (msg) => {
-    if (msg.action === 'update-stops') {
+    if (msg.action === 'set-browser-path') {
+        browserExecutablePath = msg.path;
+        console.log('[SCRAPER] Tarayıcı yolu ayarlandı:', browserExecutablePath);
+
+        // Yol geldiğinde döngüleri başlat
+        startAllLoops();
+
+    } else if (msg.action === 'update-stops') {
         if (msg.stops && Array.isArray(msg.stops)) {
             // Eski tarayıcıları kapat
             for (const [stopId, browser] of activeBrowsers) {
@@ -238,6 +300,3 @@ process.on('message', async (msg) => {
 process.on('uncaughtException', (err) => {
     console.error('[SCRAPER] Uncaught:', err.message);
 });
-
-// Başlangıçta otomatik başlat
-startAllLoops();

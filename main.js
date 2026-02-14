@@ -1,6 +1,7 @@
 import { app, BrowserWindow } from 'electron';
 import path from 'path';
 import { fileURLToPath } from 'url';
+import { existsSync } from 'fs';
 import express from 'express';
 import { fork } from 'child_process';
 import { WebSocketServer } from 'ws';
@@ -30,6 +31,32 @@ let updateStatus = {
     error: null,
     lastCheck: null
 };
+
+// Sistemde yüklü tarayıcıyı bul (Chrome veya Edge)
+function findBrowserPath() {
+    const possiblePaths = [
+        // Edge (Windows 10/11'de her zaman var)
+        'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',
+        'C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe',
+        // Chrome
+        'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe',
+        'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe',
+        // Chrome (kullanıcı dizini)
+        path.join(process.env.LOCALAPPDATA || '', 'Google\\Chrome\\Application\\chrome.exe'),
+        // Edge (kullanıcı dizini)
+        path.join(process.env.LOCALAPPDATA || '', 'Microsoft\\Edge\\Application\\msedge.exe'),
+    ];
+
+    for (const browserPath of possiblePaths) {
+        if (browserPath && existsSync(browserPath)) {
+            console.log('[MAIN] Tarayıcı bulundu:', browserPath);
+            return browserPath;
+        }
+    }
+
+    console.error('[MAIN] Sistemde Chrome veya Edge bulunamadı!');
+    return null;
+}
 
 // AutoUpdater
 autoUpdater.autoDownload = true;
@@ -101,6 +128,12 @@ function broadcastToClients(message) {
 }
 
 function startScraper() {
+    const browserPath = findBrowserPath();
+    if (!browserPath) {
+        console.error('[MAIN] Tarayıcı bulunamadı, scraper başlatılamıyor!');
+        return;
+    }
+
     console.log('[MAIN] Scraper başlatılıyor...');
     scraperProcess = fork(path.join(__dirname, 'scraper.cjs'));
 
@@ -121,6 +154,9 @@ function startScraper() {
         console.log('[MAIN] Scraper exited:', code);
         scraperProcess = null;
     });
+
+    // Tarayıcı yolunu scraper'a gönder
+    scraperProcess.send({ action: 'set-browser-path', path: browserPath });
 }
 
 function startExpressServer() {

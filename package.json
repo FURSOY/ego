@@ -1,6 +1,6 @@
 {
   "name": "ego-otobus-takip",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "main": "main.js",
   "type": "module",
   "scripts": {
@@ -18,9 +18,7 @@
     "cheerio": "^1.1.2",
     "electron-updater": "^6.7.3",
     "express": "^5.1.0",
-    "puppeteer": "^24.20.0",
-    "puppeteer-extra": "^3.3.6",
-    "puppeteer-extra-plugin-stealth": "^2.11.2",
+    "puppeteer-core": "^24.20.0",
     "ws": "^8.19.0"
   },
   "devDependencies": {
