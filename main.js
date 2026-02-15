@@ -127,31 +127,41 @@ function broadcastToClients(message) {
     });
 }
 
+// Frontend konsoluna log gönder
+function broadcastLog(level, ...args) {
+    const msg = args.map(a => typeof a === 'object' ? JSON.stringify(a) : String(a)).join(' ');
+    console.log(msg);
+    broadcastToClients({ type: 'debug-log', level, message: msg, timestamp: new Date().toISOString() });
+}
+
 function startScraper() {
     const browserPath = findBrowserPath();
     if (!browserPath) {
-        console.error('[MAIN] Tarayıcı bulunamadı, scraper başlatılamıyor!');
+        broadcastLog('error', '[MAIN] Sistemde Chrome veya Edge bulunamadı! Scraper başlatılamıyor.');
         return;
     }
 
-    console.log('[MAIN] Scraper başlatılıyor...');
+    broadcastLog('info', '[MAIN] Tarayıcı bulundu:', browserPath);
+    broadcastLog('info', '[MAIN] Scraper başlatılıyor...');
     scraperProcess = fork(path.join(__dirname, 'scraper.cjs'));
 
     scraperProcess.on('message', (msg) => {
         if (msg.type === 'stop-data') {
             stopDataCache.set(msg.stopId, msg.buses);
             broadcastToClients(msg);
+            broadcastLog('info', `[SCRAPER] ${msg.stopId}: ${msg.buses.length} otobüs bulundu`);
         } else if (msg.type === 'stop-status') {
             broadcastToClients(msg);
+            broadcastLog('info', `[SCRAPER] ${msg.stopId} durum: ${msg.status} - ${msg.message}`);
         }
     });
 
     scraperProcess.on('error', (err) => {
-        console.error('[MAIN] Scraper error:', err);
+        broadcastLog('error', '[MAIN] Scraper error:', err.message);
     });
 
     scraperProcess.on('exit', (code) => {
-        console.log('[MAIN] Scraper exited:', code);
+        broadcastLog('warn', '[MAIN] Scraper kapandı, exit code:', code);
         scraperProcess = null;
     });
 

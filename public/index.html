@@ -353,6 +353,11 @@
                         const msg = JSON.parse(event.data);
                         if (msg.type === 'stop-data') {
                             updateStopData(msg.stopId, msg.buses);
+                        } else if (msg.type === 'debug-log') {
+                            const logFn = msg.level === 'error' ? console.error
+                                : msg.level === 'warn' ? console.warn
+                                    : console.log;
+                            logFn(`[BACKEND] ${msg.message}`);
                         }
                     } catch (err) { }
                 };
